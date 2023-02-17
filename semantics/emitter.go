@@ -2,6 +2,7 @@ package semantics
 
 import (
 	"fmt"
+	"runtime/debug"
 	"strconv"
 
 	"github.com/kingfolk/capybara/ast"
@@ -12,14 +13,18 @@ import (
 type Scope struct {
 	// TODO nested scope
 	// parent *Scope
-	vars map[string]string
-	blk  *ir.Block
+	blockId int
+	vars    map[string]string
+	blk     *ir.Block
 }
 
 type Emitter struct {
-	count int
-	env   *types.Env
-	scope *Scope
+	debug   bool
+	count   int
+	env     *types.Env
+	globals map[string]types.ValType
+	scope   *Scope
+	module  *ir.Module
 }
 
 const (
@@ -29,31 +34,55 @@ const (
 func NewScope() *Scope {
 	return &Scope{
 		vars: map[string]string{},
-		blk: &ir.Block{
-			Name: "root",
-		},
 	}
 }
 
+type GlobalDef struct {
+	Name string
+	Tp   types.ValType
+}
+
 // EmitIR converts given AST into MIR with type environment
-func EmitIR(mod *ast.AST) (blk *ir.Block, env *types.Env, err error) {
+func EmitIR(mod *ast.AST, debugMode bool, globals ...GlobalDef) (root *ir.Module, em *Emitter, err error) {
 	e := &Emitter{
+		debug: debugMode,
 		count: 0,
 		env: &types.Env{
 			DeclTable: map[string]types.ValType{},
 		},
-		scope: NewScope(),
+		globals: map[string]types.ValType{},
+		scope:   NewScope(),
+		module:  &ir.Module{},
 	}
 
 	defer func() {
 		if message := recover(); message != nil {
-			// debug.PrintStack()
+			debug.PrintStack()
 			err = fmt.Errorf("Emit fail. %v", message)
 		}
 	}()
 
-	e.emitBlock(rootBlock, mod.Root...)
-	return e.scope.blk, e.env, err
+	for _, g := range globals {
+		e.globals[g.Name] = g.Tp
+		e.env.DeclTable[g.Name] = g.Tp
+		e.scope.vars[g.Name] = g.Name
+	}
+
+	blk := e.emitBlock(rootBlock, mod.Root...)
+	e.module.Root = blk
+	for _, ins := range blk.Ins {
+		if f, ok := ins.Val.(*ir.Func); ok {
+			e.module.Funcs = append(e.module.Funcs, f)
+		}
+	}
+
+	maker := ir.NewDominatorMaker(blk, e.debug)
+	maker.Lift(e.env.DeclTable)
+	root = e.module
+	root.Env = e.env
+	em = e
+
+	return
 }
 
 // EmitIRWithGlobal converts given AST into MIR with type environment
@@ -69,8 +98,7 @@ func EmitIRWithGlobal(mod *ast.AST, globalVars map[string]types.ValType) (*ir.Bl
 		e.env.DeclTable[k] = t
 		e.scope.vars[k] = k
 	}
-	e.emitBlock(rootBlock, mod.Root...)
-	return e.scope.blk, e.env
+	return e.emitBlock(rootBlock, mod.Root...), e.env
 }
 
 func (e *Emitter) emitBlock(name string, nodes ...ast.Expr) *ir.Block {
@@ -81,20 +109,24 @@ func (e *Emitter) emitBlock(name string, nodes ...ast.Expr) *ir.Block {
 		}
 	}()
 
-	e.scope.blk = &ir.Block{
-		Name: name,
-	}
+	blk := ir.NewBlock(&e.scope.blockId, name)
+	e.scope.blk = blk
 	for _, node := range nodes {
 		e.emitInsn(node)
 	}
-	return e.scope.blk
+	return blk
+}
+
+func (e *Emitter) GetDeclVars() map[string]string {
+	return e.scope.vars
 }
 
 func (e *Emitter) emitInsn(node ast.Expr) *ir.Instr {
-	// fmt.Println("<<< emitInsn", node.Name(), node)
 	switch n := node.(type) {
-	// case *ast.Unit:
-	// 	return e.insn(mir.UnitVal, nil, node)
+	case *ast.Unit:
+		// TODO TEST
+		c := ir.NewUnit()
+		return e.rvalInstr(c)
 	case *ast.Int:
 		c := ir.NewConst(types.Int, []byte(strconv.FormatInt(n.Value, 10)))
 		return e.rvalInstr(c)
@@ -102,8 +134,9 @@ func (e *Emitter) emitInsn(node ast.Expr) *ir.Instr {
 		c := ir.NewConst(types.Float, []byte(strconv.FormatFloat(n.Value, 'g', -1, 64)))
 		return e.rvalInstr(c)
 	case *ast.VarRef:
-		if tp, ok := e.env.DeclTable[n.Symbol.Name]; ok {
-			ident := e.scope.vars[n.Symbol.Name]
+		// TODO NESTED SCOPE
+		if ident, ok := e.scope.vars[n.Symbol.Name]; ok {
+			tp := e.env.DeclTable[ident]
 			insn := e.rvalInstr(ir.NewRef(tp, ident))
 			return insn
 		}
@@ -145,14 +178,12 @@ func (e *Emitter) emitInsn(node ast.Expr) *ir.Instr {
 	case *ast.Loop:
 		return e.emitLoopInsn(n)
 	case *ast.Let:
-		// fmt.Println("*** n.Symbol", n.Symbol)
-		// fmt.Println("*** n.Bound", n.Bound, n.Bound.Name())
-		// fmt.Println("*** n.Type", n.Type)
 		return e.emitLetInsn(n)
+	case *ast.Mutate:
+		return e.emitMutateInsn(n)
 	case *ast.LetRec:
 		return e.emitFunInsn(n)
 	default:
-		fmt.Printf(".. node %T\n", node)
 		panic(fmt.Sprintf("unsupported instr %s: %+v", node.Name(), node))
 	}
 }
@@ -208,34 +239,73 @@ func (e *Emitter) emitLetInsn(node *ast.Let) *ir.Instr {
 	return bound
 }
 
+func (e *Emitter) emitMutateInsn(node *ast.Mutate) *ir.Instr {
+	right := e.emitInsn(node.Right)
+	ident, ok := e.scope.vars[node.Ref.Symbol.Name]
+	if !ok {
+		panic("TypeError: undeclared of " + node.Ref.Symbol.Name)
+	}
+	it := &ir.Instr{
+		Ident: ident,
+		Kind:  ir.RValKind,
+		Val:   ir.NewRef(right.Type(), right.Ident),
+	}
+	e.scope.blk.Ins = append(e.scope.blk.Ins, it)
+	return it
+}
+
 func (e *Emitter) emitIfInsn(n *ast.If) *ir.Instr {
 	// TODO: prev muse be bool type
 	prev := e.emitInsn(n.Cond)
-	thenBlk := e.emitBlock("then", n.Then...)
-	elseBlk := e.emitBlock("else", n.Else...)
+	thenBlk := e.emitBlock("if "+prev.Ident+" then", n.Then...)
+	elseBlk := e.emitBlock("if "+prev.Ident+" else", n.Else...)
+	linkBB(e.scope.blk, thenBlk)
+	linkBB(e.scope.blk, elseBlk)
 	val := &ir.If{
 		Cond: prev.Ident,
 		Then: thenBlk,
 		Else: elseBlk,
 	}
 	i := e.instr(val, e.genID(), ir.IfKind)
+
+	e.scope.blk = ir.NewBlock(&e.scope.blockId, "if "+prev.Ident+" after")
+	linkBB(thenBlk, e.scope.blk)
+	linkBB(elseBlk, e.scope.blk)
+
 	return i
 }
 
 func (e *Emitter) emitLoopInsn(n *ast.Loop) *ir.Instr {
-	start := e.emitInsn(n.From)
-	cond := e.emitInsn(n.To)
-	body := e.emitBlock("body", n.Body...)
-	val := &ir.Loop{
-		ItIdent: n.ItSymbol.Name,
-		From:    start.Ident,
-		To:      cond.Ident,
-		Body:    body,
+	origBlk := e.scope.blk
+
+	loopStartBlk := e.emitBlock("loop start")
+	loopBodyBlk := e.emitBlock("loop body", n.Body...)
+	afterBlk := e.emitBlock("loop after")
+
+	e.scope.blk = loopStartBlk
+	cond := e.emitInsn(n.Cond)
+	val := &ir.If{
+		Cond: cond.Ident,
+		Then: loopBodyBlk,
+		Else: afterBlk,
 	}
-	return e.instr(val, e.genID(), ir.IfKind)
+	e.instr(val, ir.DangleIdent(), ir.IfKind)
+	linkBB(origBlk, loopStartBlk)
+	linkBB(loopStartBlk, loopBodyBlk)
+	linkBB(loopStartBlk, afterBlk)
+	linkBB(loopBodyBlk, loopStartBlk)
+
+	e.scope.blk = afterBlk
+	return e.emitInsn(&ast.Unit{})
 }
 
 func (e *Emitter) emitFunInsn(node *ast.LetRec) *ir.Instr {
+	origScope := e.scope
+	e.scope = NewScope()
+	for k := range e.globals {
+		e.scope.vars[k] = k
+	}
+
 	name := node.Func.Symbol.Name
 	// ty, ok := e.env.DeclTable[name]
 	// if !ok {
@@ -245,32 +315,39 @@ func (e *Emitter) emitFunInsn(node *ast.LetRec) *ir.Instr {
 	params := make([]string, 0, len(node.Func.Params))
 	paramTypes := make([]types.ValType, len(node.Func.Params))
 	for i, param := range node.Func.Params {
-		params = append(params, param.Ident.Name)
+		paramName := param.Ident.Name
+		ident := e.genID()
+		params = append(params, ident)
 		tp := e.emitType(param.Type)
 		paramTypes[i] = tp
-		e.env.DeclTable[param.Ident.Name] = tp
-		e.scope.vars[param.Ident.Name] = param.Ident.Name
+		e.env.DeclTable[ident] = tp
+		e.scope.vars[paramName] = ident
+	}
+	blkName := name
+	blk := e.emitBlock(blkName, node.Func.Body...)
+	if e.debug {
+		fmt.Println("--- original bb ---")
+		fmt.Println(ir.CFGString(blk))
+		fmt.Println("--- original bb end ---")
 	}
 
-	blk := e.emitBlock(fmt.Sprintf("body (%s)", name), node.Func.Body...)
-
-	funTp := &types.Fun{
+	funTp := &types.Func{
 		Params: paramTypes,
 		Ret:    e.emitType(node.Func.RetType),
 	}
 
-	val := &ir.Fun{
+	val := &ir.Func{
 		Params: params,
 		Body:   blk,
 		Tp:     funTp,
 	}
 
+	maker := ir.NewDominatorMaker(blk, e.debug, params...)
+	declTable := maker.Lift(e.env.DeclTable)
+	val.DeclTable = declTable
+
+	e.scope = origScope
 	return e.instr(val, name, ir.FuncKind)
-
-	// body := e.emitInsn(node.Body)
-	// e.instr(blk, name, ir.FuncKind, body)
-
-	// return body
 }
 
 func (e *Emitter) emitArrLitInsn(node *ast.ArrayLit) *ir.Instr {
@@ -320,7 +397,6 @@ func (e *Emitter) emitArrPutInsn(node *ast.ArrayPut) *ir.Instr {
 }
 
 func (e *Emitter) emitAppInsn(node *ast.Apply) *ir.Instr {
-	fmt.Println("----- emitAppInsn")
 	ref, ok := node.Callee.(*ast.VarRef)
 	if !ok {
 		panic("unsupported apply instr")
@@ -337,7 +413,7 @@ func (e *Emitter) emitAppInsn(node *ast.Apply) *ir.Instr {
 	}
 	val := &ir.Call{
 		Name: ref.Symbol.Name,
-		Tp:   t.(*types.Fun).Ret,
+		Tp:   t.(*types.Func).Ret,
 		Args: args,
 	}
 
@@ -361,7 +437,7 @@ func (e *Emitter) instr(val ir.Val, ident string, kind int) *ir.Instr {
 
 func (e *Emitter) genID() string {
 	e.count++
-	return "$v" + strconv.Itoa(e.count)
+	return ir.GenVarIdent(e.count)
 }
 
 func (e *Emitter) emitType(node ast.Expr) types.ValType {
@@ -381,7 +457,14 @@ func (e *Emitter) emitType(node ast.Expr) types.ValType {
 			return types.Float
 		case "bool":
 			return types.Bool
+		case "unit":
+			return types.Unit
 		}
 	}
 	panic(fmt.Sprintf("unsupported type: %+v\n", node))
+}
+
+func linkBB(src, dest *ir.Block) {
+	src.Dest = append(src.Dest, dest)
+	dest.Src = append(dest.Src, src)
 }

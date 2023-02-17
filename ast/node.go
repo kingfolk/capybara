@@ -218,8 +218,7 @@ type (
 
 	Loop struct {
 		LoopToken *token.Token
-		ItSymbol  *Symbol
-		From, To  Expr
+		Cond      Expr
 		Body      []Expr
 	}
 
@@ -228,6 +227,11 @@ type (
 		Symbol   *Symbol
 		Bound    Expr
 		Type     Expr // Maybe nil
+	}
+
+	Mutate struct {
+		Ref   *VarRef
+		Right Expr
 	}
 
 	ExprList struct {
@@ -539,6 +543,13 @@ func (e *Let) End() locerr.Pos {
 	return e.Type.End()
 }
 
+func (e *Mutate) Pos() locerr.Pos {
+	return e.Ref.Pos()
+}
+func (e *Mutate) End() locerr.Pos {
+	return e.Right.End()
+}
+
 func (e *VarRef) Pos() locerr.Pos {
 	return e.Token.Start
 }
@@ -713,6 +724,7 @@ func (e *Or) Name() string        { return "Or" }
 func (e *If) Name() string        { return "If" }
 func (e *Loop) Name() string      { return "Loop" }
 func (e *Let) Name() string       { return fmt.Sprintf("Let (%s)", e.Symbol.DisplayName) }
+func (e *Mutate) Name() string    { return fmt.Sprintf("Mutate (%s)", e.Ref.Symbol.DisplayName) }
 func (e *VarRef) Name() string    { return fmt.Sprintf("VarRef (%s)", e.Symbol.DisplayName) }
 func (e *LetRec) Name() string {
 	params := make([]string, len(e.Func.Params))

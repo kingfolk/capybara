@@ -1,0 +1,80 @@
+/*@bb
+#bb0:$root$
+{
+  $v1 = f($v1)
+}
+
+f($v1){
+  #bb0:f
+  {
+    $v2 = $v1
+    $v3 = 3
+    $v4 = $v2+$v3
+    $v5 = $v4
+  }; to #bb1
+  
+  #bb1:loop start; from #bb0 ,#bb2
+  {
+    $v13 = Phi($v5, $v21)
+    $v14 = $v13
+    $v15 = 10
+    $v16 = $v14<$v15
+    $v_dangle = If $v16 Then #bb2 Else #bb3
+  }; to #bb2 ,#bb3
+  
+  #bb2:loop body; from #bb1
+  {
+    $v18 = $v13
+    $v19 = 2
+    $v20 = $v18+$v19
+    $v21 = $v20
+  }; to #bb1
+  
+  #bb3:loop after; from #bb1
+  {
+    $v22 = ()
+    $v23 = $v13
+  }
+}
+*/
+//@val int(11), [int(2)]
+fun f(a:int): int = { a = a + 3; for a < 10 { a = a+2 }; a }
+$$
+
+/*@bb
+#bb0:$root$
+{
+  $v1 = f($v1)
+}
+
+f($v1){
+  #bb0:f
+  {
+  }; to #bb1
+  
+  #bb1:loop start; from #bb0 ,#bb2
+  {
+    $v9 = Phi($v1, $v17)
+    $v10 = $v9
+    $v11 = 10
+    $v12 = $v10<$v11
+    $v_dangle = If $v12 Then #bb2 Else #bb3
+  }; to #bb2 ,#bb3
+  
+  #bb2:loop body; from #bb1
+  {
+    $v14 = $v9
+    $v15 = 2
+    $v16 = $v14+$v15
+    $v17 = $v16
+  }; to #bb1
+  
+  #bb3:loop after; from #bb1
+  {
+    $v18 = ()
+    $v19 = $v18
+  }
+}
+*/
+fun f(a:int): unit = { let b = for a < 10 { a = a+2 }; b }
+$$

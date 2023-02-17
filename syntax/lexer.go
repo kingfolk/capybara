@@ -441,10 +441,6 @@ func lexIdent(l *Lexer) stateFn {
 		return nil
 	}
 	i := string(l.src.Code[l.start.Offset:l.current.Offset])
-	// TODO
-	// if i == "Array" {
-	// 	return lexArrayCreate
-	// }
 	l.emitIdent(i)
 	return lex
 }
