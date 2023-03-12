@@ -1,0 +1,66 @@
+//@val int(12)
+fun f(): int = { let a:array<int,3> = array<int>(1,2,3);a[0]<-10;a[0]+a[1] }
+$$
+
+/*@bb
+#bb0:$root$
+{
+  $v1 = f($v1)
+}
+
+f($v1){
+  #bb0:f
+  {
+    $v2 = 1
+    $v3 = 2
+    $v4 = 3
+    $v5 = ArrMake<int>($v2, $v3, $v4) 
+    $v6 = $v1
+    $v7 = 10
+    $v8 = $v6>$v7
+    $v9 = If $v8 Then #bb1 Else #bb2
+  }; to #bb1 ,#bb2
+  
+  #bb1:if $v8 then; from #bb0
+  {
+    $v10 = $v5
+    $v11 = 1
+    $v12 = $v1
+    $v13 = 1
+    $v14 = $v12+$v13
+    $v15 = $v10[$v11] <- $v14
+  }; to #bb3
+  
+  #bb2:if $v8 else; from #bb0
+  {
+    $v35 = $v5
+    $v36 = 2
+    $v37 = $v1
+    $v38 = 1
+    $v39 = $v37-$v38
+    $v40 = $v35[$v36] <- $v39
+  }; to #bb3
+  
+  #bb3:if $v8 after; from #bb1 ,#bb2
+  {
+    $v28 = $v5
+    $v29 = 1
+    $v30 = $v28[$v29]
+    $v31 = $v5
+    $v32 = 2
+    $v33 = $v31[$v32]
+    $v34 = $v30+$v33
+  }
+}
+*/
+//@val int(9), [int(8)]
+//@val int(19), [int(15)]
+fun f(b:int): int = {
+    let a:array<int,3> = array<int>(1,2,3);
+    if b > 10 then
+        a[1] <- b+1
+    else
+        a[2] <- b-1;
+    a[1]+a[2]
+}
+$$

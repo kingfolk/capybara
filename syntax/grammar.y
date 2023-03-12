@@ -88,6 +88,7 @@ import (
 %right prec_let
 %right prec_seq
 %right SEMICOLON
+%left prec_def
 %nonassoc WITH
 %right prec_if
 %right prec_match
@@ -204,11 +205,10 @@ exp:
 	| IF exp THEN seq_exp ELSE seq_exp
 		%prec prec_if
 		{ $$ = &ast.If{$1, $2, $4, $6} }
-	| FOR IDENT EQUAL exp DOT DOT exp LCURLY seq_exp RCURLY
+	| FOR exp LCURLY seq_exp RCURLY
 		%prec prec_if
-		{ 
-			ident := sym($2)
-			$$ = &ast.Loop{$1, ident, $4, $7, $9}
+		{
+			$$ = &ast.Loop{$1, $2, $4}
 		}
 	| ARRAY LESS simple_type GREATER LPAREN args RPAREN
 		{ $$ = &ast.ArrayLit{$1, $7, $6} }
@@ -216,14 +216,19 @@ exp:
 		{ $$ = &ast.ArrayPut{$1, $3, $6} }
 	| vardef
 		{ $$ = $1 }
+	| IDENT EQUAL exp
+		%prec prec_def
+		{
+			ident := sym($1)
+			ref := &ast.VarRef{$1, ident}
+			$$ = &ast.Mutate{ref, $3}
+		}
 	| simple_exp LPAREN args RPAREN
 		%prec prec_app
 		{ $$ = &ast.Apply{$1, $3} }
 	| FUN IDENT params simple_type_annotation EQUAL LCURLY seq_exp RCURLY
 		%prec prec_fun
 		{
-			// t := $1
-			// ident := ast.NewSymbol(fmt.Sprintf("lambda.line%d.col%d", t.Start.Line, t.Start.Column))
 			ident := sym($2)
 			def := &ast.FuncDef{
 				Symbol: ident,
@@ -301,14 +306,6 @@ simple_exp:
 				$$ = &ast.String{$1, s}
 			}
 		}
-	// | LBRACKET_BAR BAR_RBRACKET
-	// 	{ $$ = &ast.ArrayLit{$1, $2, nil} }
-	// | LBRACKET_BAR semi_elems opt_semi BAR_RBRACKET
-	// 	{ $$ = &ast.ArrayLit{$1, $4, $2} }
-	// | LBRACKET RBRACKET error
-	// 	{ yylex.Error("List literal is not implemented yet. Please use array literal [| e1; e2; ... |] instead") }
-	// | LBRACKET semi_elems opt_semi RBRACKET error
-	// 	{ yylex.Error("List literal is not implemented yet. Please use array literal [| e1; e2; ... |] instead") }
 	| NONE
 		{ $$ = &ast.None{$1} }
 	| IDENT
@@ -330,12 +327,6 @@ int_exp:
 				$$ = &ast.Int{$1, i}
 			}
 		}
-
-// semi_elems:
-// 	exp %prec prec_seq
-// 		{ $$ = []ast.Expr{$1} }
-// 	| semi_elems SEMICOLON exp
-// 		{ $$ = append($1, $3) }
 
 // opt_semi:
 // 	/* empty */ {} | SEMICOLON {}

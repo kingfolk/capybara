@@ -1,0 +1,41 @@
+/*@bb
+#bb0:$root$
+{
+  $v1 = f($v1)
+}
+
+f($v1){
+  #bb0:f
+  {
+    $v2 = 100
+    $v3 = $v1
+    $v4 = 123
+    $v5 = $v3<$v4
+    $v6 = If $v5 Then #bb1 Else #bb2
+  }; to #bb1 ,#bb2
+  
+  #bb1:if $v5 then; from #bb0
+  {
+    $v7 = 200
+    $v8 = $v7
+  }; to #bb3
+  
+  #bb2:if $v5 else; from #bb0
+  {
+    $v15 = 300
+    $v16 = $v15
+  }; to #bb3
+  
+  #bb3:if $v5 after; from #bb1 ,#bb2
+  {
+    $v11 = Phi($v8, $v16)
+    $v12 = $v11
+    $v13 = 123
+    $v14 = $v12+$v13
+  }
+}
+*/
+//@val int(323), [int(1)]
+//@val int(423), [int(1000)]
+fun f(a:int): int = { let x = 100; if a < 123 then x = 200 else x = 300; x+123 }
+$$

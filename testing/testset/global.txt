@@ -1,0 +1,60 @@
+/*setup
+let globalarr:array<int,5> = array<int>(1, 3, 5, 6, 9);
+let globalarr1:array<int,5> = array<int>(0, 0, 0, 0, 0)
+*/
+
+//@val int(6)
+fun f(): int = {globalarr[3]}
+$$
+
+//@val int(6)
+fun f(): int = { let res = globalarr[3]; res }
+$$
+
+/*@bb
+#bb0:$root$
+{
+  $v1 = f($v1)
+}
+
+f($v1){
+  #bb0:f
+  {
+    $v2 = 0
+  }; to #bb1
+  
+  #bb1:loop start; from #bb0 ,#bb2
+  {
+    $v11 = Phi($v2, $v26)
+    $v16 = Phi($v1, $v30)
+    $v17 = $v16
+    $v18 = 3
+    $v19 = $v17<$v18
+    $v_dangle = If $v19 Then #bb2 Else #bb3
+  }; to #bb2 ,#bb3
+  
+  #bb2:loop body; from #bb1
+  {
+    $v21 = $v11
+    $v22 = globalarr
+    $v23 = $v16
+    $v24 = $v22[$v23]
+    $v25 = $v21+$v24
+    $v26 = $v25
+    $v27 = $v16
+    $v28 = 1
+    $v29 = $v27+$v28
+    $v30 = $v29
+  }; to #bb1
+  
+  #bb3:loop after; from #bb1
+  {
+    $v31 = ()
+    $v32 = $v11
+  }
+}
+*/
+//@val int(9), [int(0)]
+//@val int(8), [int(1)]
+fun f(a:int): int = { let res = 0; for a < 3 { res = res+globalarr[a]; a = a+1 }; res }
+$$

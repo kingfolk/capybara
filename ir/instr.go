@@ -1,6 +1,7 @@
 package ir
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/kingfolk/capybara/types"
@@ -41,12 +42,23 @@ var OpKindString = map[OperatorKind]string{
 }
 
 type (
-	Block struct {
-		Name string
-		Ins  []*Instr
+	Module struct {
+		Root *Block
+		// Env root scope env
+		Env   *types.Env
+		Funcs []*Func
 	}
 
-	// TODO: Val 增加一个例如Code接口，用于区分不同的Val
+	Block struct {
+		Id   int
+		Name string
+		Ins  []*Instr
+
+		Src  []*Block
+		Dest []*Block
+		dom  domInfo
+	}
+
 	Val interface {
 		Kind() int
 		Type() types.ValType
@@ -75,23 +87,24 @@ type (
 		Else *Block
 	}
 
-	Loop struct {
-		ItIdent  string
-		From, To string
-		Body     *Block
-	}
-
-	Fun struct {
+	Func struct {
 		Params      []string
 		Body        *Block
 		Tp          types.ValType
 		IsRecursive bool
+		DeclTable   map[string]types.ValType
 	}
 
 	Call struct {
 		Name string
 		Tp   types.ValType
 		Args []string
+	}
+
+	Phi struct {
+		Orig  string
+		Tp    types.ValType
+		Edges []string
 	}
 
 	Instr struct {
@@ -123,10 +136,17 @@ const (
 	IfKind
 	FuncKind
 	CallKind
+	PhiKind
 )
 
 var _ Val = (*Const)(nil)
 var _ Val = (*Expr)(nil)
+
+func NewUnit() *Const {
+	return &Const{
+		tp: types.Unit,
+	}
+}
 
 func NewConst(tp types.ValType, val []byte) *Const {
 	return &Const{
@@ -148,6 +168,15 @@ func NewBinary(op OperatorKind, left, right string, tp types.ValType) *Expr {
 		Args: []string{left, right},
 		tp:   tp,
 	}
+}
+
+func NewBlock(blockId *int, name string) *Block {
+	b := &Block{
+		Id:   *blockId,
+		Name: name,
+	}
+	*blockId++
+	return b
 }
 
 func (e *Block) Kind() int {
@@ -201,6 +230,9 @@ func (e *Const) Type() types.ValType {
 }
 
 func (e *Const) String() string {
+	if e.tp == types.Unit {
+		return "()"
+	}
 	return string(e.val)
 }
 
@@ -225,19 +257,9 @@ func (e *If) Type() types.ValType {
 }
 
 func (e *If) String() string {
-	return "If " + e.Cond + " Then\n" + e.Then.String() + "\nElse\n" + e.Else.String()
-}
-
-func (e *Loop) Kind() int {
-	return IfKind
-}
-
-func (e *Loop) Type() types.ValType {
-	return e.Body.Type()
-}
-
-func (e *Loop) String() string {
-	return "Loop " + e.To + " Then\n" + e.Body.String()
+	thenBB := "#bb" + strconv.Itoa(e.Then.Id)
+	elseBB := "#bb" + strconv.Itoa(e.Else.Id)
+	return "If " + e.Cond + " Then " + thenBB + " Else " + elseBB
 }
 
 func (e *Call) Kind() int {
@@ -288,18 +310,83 @@ func (e *ArrPut) String() string {
 	return e.Arr + "[" + e.Index + "] <- " + e.Right
 }
 
-func (e *Fun) Kind() int {
+func (e *Func) Kind() int {
 	return FuncKind
 }
 
-func (e *Fun) Type() types.ValType {
+func (e *Func) Type() types.ValType {
 	return e.Tp
 }
 
-func (e *Fun) String() string {
-	return "Fun(" + strings.Join(e.Params, ", ") + ") " + e.Body.String()
+func (e *Func) String() string {
+	return e.Body.Name + "(" + strings.Join(e.Params, ",") + ")"
+}
+
+func (e *Phi) Kind() int {
+	return PhiKind
+}
+
+func (e *Phi) Type() types.ValType {
+	return e.Tp
+}
+
+func (e *Phi) String() string {
+	edges := ""
+	for i, e := range e.Edges {
+		if i != 0 {
+			edges += ", "
+		}
+		edges += e
+	}
+	return "Phi(" + edges + ")"
 }
 
 func (it *Instr) String() string {
 	return it.Ident + " = " + it.Val.String()
+}
+
+func CFGFuncString(fn *Func) string {
+	res := CFGString(fn.Body)
+	res = strings.ReplaceAll(res, "\n", "\n  ")
+	res = "  " + res
+	res = fn.String() + "{\n" + res
+	res = strings.TrimSpace(res)
+	res += "\n}"
+	return res
+}
+
+func CFGString(bb *Block) string {
+	var bbNames = func(prefix string, blocks []*Block) string {
+		if len(blocks) == 0 {
+			return ""
+		}
+		var res string
+		for i, b := range blocks {
+			if i > 0 {
+				res += " ,"
+			}
+			res += "#bb" + strconv.Itoa(b.Id)
+		}
+		return prefix + res
+	}
+
+	visited := map[int]bool{}
+	stack := []*Block{bb}
+	visited[bb.Id] = true
+	var res string
+	for len(stack) > 0 {
+		top := stack[0]
+		stack = stack[1:]
+		res += "#bb" + strconv.Itoa(top.Id) + ":" + top.Name + bbNames("; from ", top.Src) + "\n"
+		res += top.String() + bbNames("; to ", top.Dest) + "\n\n"
+
+		for _, b := range top.Dest {
+			if !visited[b.Id] {
+				visited[b.Id] = true
+				stack = append(stack, b)
+			}
+		}
+	}
+
+	return res
 }

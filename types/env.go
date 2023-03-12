@@ -19,7 +19,7 @@ type (
 		tp int
 	}
 
-	Fun struct {
+	Func struct {
 		Ret    ValType
 		Params []ValType
 	}
@@ -35,18 +35,19 @@ const (
 	TpBool
 	TpInt
 	TpFloat
-	TpFun
+	TpFunc
 	TpArr
 )
 
 var (
+	Unit  = &primitiveType{tp: TpUnit}
 	Int   = &primitiveType{tp: TpInt}
 	Float = &primitiveType{tp: TpFloat}
 	Bool  = &primitiveType{tp: TpBool}
 )
 
 var _ ValType = (*primitiveType)(nil)
-var _ ValType = (*Fun)(nil)
+var _ ValType = (*Func)(nil)
 
 func (t *primitiveType) String() string {
 	switch t.tp {
@@ -73,7 +74,7 @@ func (t *Arr) Code() int {
 	return TpArr
 }
 
-func (t *Fun) String() string {
+func (t *Func) String() string {
 	params := make([]string, len(t.Params))
 	for i, p := range t.Params {
 		params[i] = p.String()
@@ -81,6 +82,6 @@ func (t *Fun) String() string {
 	return "(" + strings.Join(params, ", ") + ")" + "->" + t.Ret.String()
 }
 
-func (t *Fun) Code() int {
-	return TpFun
+func (t *Func) Code() int {
+	return TpFunc
 }
