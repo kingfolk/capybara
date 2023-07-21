@@ -92,6 +92,10 @@ func (lt *ltState) link(v, w *Block) {
 	lt.ancestor[w.Id] = v
 }
 
+func (m *DominatorMaker) AllBlocks() []*Block {
+	return m.allBlocks
+}
+
 func (m *DominatorMaker) buildDomTree() {
 	n := m.blockCount
 	// Allocate space for 5 contiguous [n]*Block arrays:
@@ -392,6 +396,16 @@ func (m *DominatorMaker) renameBlock(block *Block, renaming *renamingStack) {
 				i.Arr = renaming.stackSymbol(i.Arr)
 				i.Index = renaming.stackSymbol(i.Index)
 				i.Right = renaming.stackSymbol(i.Right)
+			case *Call:
+				for idx, arg := range i.Args {
+					i.Args[idx] = renaming.stackSymbol(arg)
+				}
+			case *RecLit:
+				for idx, arg := range i.Args {
+					i.Args[idx] = renaming.stackSymbol(arg)
+				}
+			case *RecAcs:
+				i.Rec = renaming.stackSymbol(i.Rec)
 			}
 			renaming.push(ir.Ident)
 			ir.Ident = renaming.stackSymbol(ir.Ident)

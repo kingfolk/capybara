@@ -10,6 +10,7 @@ import (
 
 	"github.com/kingfolk/capybara/ast"
 	"github.com/kingfolk/capybara/codegen"
+	"github.com/kingfolk/capybara/errors"
 	"github.com/kingfolk/capybara/ir"
 	"github.com/kingfolk/capybara/semantics"
 	"github.com/kingfolk/capybara/syntax"
@@ -32,6 +33,7 @@ type (
 	RunResult struct {
 		input  []*ir.Const
 		output *ir.Const
+		outerr errors.ErrorCode
 	}
 
 	AssertFrame struct {
@@ -70,7 +72,7 @@ func RunTest(t *testing.T, debug bool, file string) {
 	}
 }
 
-func emitMod(t *testing.T, debug bool, raw string, setupPairs []*codegen.ExtGlobal) (*ir.Module, *semantics.Emitter) {
+func emitMod(t *testing.T, debug bool, raw string, setupPairs []*codegen.ExtGlobal) (*ir.Module, *semantics.Emitter, error) {
 	s := locerr.NewDummySource(raw)
 	node, err := syntax.Parse(s)
 	if err != nil {
@@ -86,13 +88,20 @@ func emitMod(t *testing.T, debug bool, raw string, setupPairs []*codegen.ExtGlob
 			Tp:   p.Tp,
 		})
 	}
-	mod, em, err := semantics.EmitIR(node, debug, globals...)
-	require.NoError(t, err)
-	return mod, em
+	return semantics.EmitIR(node, debug, globals...)
 }
 
 func RunCase(t *testing.T, debug bool, frame *AssertFrame, setupPairs []*codegen.ExtGlobal) {
-	mod, _ := emitMod(t, debug, frame.body, setupPairs)
+	mod, _, emitErr := emitMod(t, debug, frame.body, setupPairs)
+	if emitErr != nil {
+		er, ok := emitErr.(errors.LangError)
+		if !ok {
+			assert.Fail(t, "emit error is not LangError: "+emitErr.Error())
+		}
+		assert.Equal(t, frame.result.outerr, er.Code, "assert error fail. err: "+emitErr.Error())
+		return
+	}
+
 	var actualBb string
 	actualBb += ir.CFGString(mod.Root)
 	for _, fn := range mod.Funcs {
@@ -113,16 +122,21 @@ func RunCase(t *testing.T, debug bool, frame *AssertFrame, setupPairs []*codegen
 			}
 		}
 		var args []llvm.GenericValue
-		var expected = constToGenericValue(frame.result.output)
-		for _, arg := range frame.result.input {
-			args = append(args, constToGenericValue(arg))
-		}
-		res := codegen.RunJit(jitFn, setupPairs, args...)
-		switch frame.result.output.Type() {
-		case types.Int:
-			assert.Equal(t, int64(expected.Int(true)), int64(res.Int(true)))
-		default:
-			panic("unsupported type: " + frame.result.output.Type().String())
+		if frame.result.output != nil {
+			require.NoError(t, emitErr)
+			var expected = constToGenericValue(frame.result.output)
+			for _, arg := range frame.result.input {
+				args = append(args, constToGenericValue(arg))
+			}
+			res := codegen.RunJit(jitFn, setupPairs, args...)
+			switch frame.result.output.Type() {
+			case types.Int:
+				assert.Equal(t, int64(expected.Int(true)), int64(res.Int(true)))
+			default:
+				panic("unsupported type: " + frame.result.output.Type().String())
+			}
+		} else {
+			panic("unreachable")
 		}
 	}
 
@@ -155,16 +169,17 @@ func parseSetupSection(t *testing.T, raw string) (string, []*codegen.ExtGlobal) 
 	}
 	restRaw := strings.TrimSpace(raw[end+2:])
 	setup := strings.TrimSpace(raw[7:end])
-	mod, em := emitMod(t, false, setup, nil)
+	mod, em, err := emitMod(t, false, setup, nil)
+	require.NoError(t, err)
 	constMap := map[string]*ir.Const{}
-	arrMap := map[string]*ir.ArrMake{}
+	arrMap := map[string]*ir.ArrLit{}
 	for _, ins := range mod.Root.Ins {
 		switch v := ins.Val.(type) {
 		case *ir.Ref:
 			constMap[ins.Ident] = constMap[v.Ident]
 		case *ir.Const:
 			constMap[ins.Ident] = v
-		case *ir.ArrMake:
+		case *ir.ArrLit:
 			arrMap[ins.Ident] = v
 		}
 	}
@@ -250,18 +265,18 @@ func parseAssertSection(raw string) *AssertFrame {
 	var parseInputOutput = func(raw string) RunResult {
 		errMsg := "illegal input output assertion line. should has format of `output, [input_param1, input_param2 ...]`, `int64(1), [int64(2)...]`"
 		sep := strings.Index(raw, ",")
-		var output string
-		var inputs []string
+		var outputRaw string
+		var inputRaws []string
 		if sep == -1 {
-			output = raw
+			outputRaw = raw
 		} else {
-			output = raw[:sep]
+			outputRaw = strings.TrimSpace(raw[:sep])
 			inputRaw := strings.TrimSpace(raw[sep+1:])
 			if inputRaw[0] != '[' || inputRaw[len(inputRaw)-1] != ']' {
 				panic(errMsg + ". but have: " + inputRaw)
 			}
 			inputRaw = inputRaw[1 : len(inputRaw)-1]
-			inputs = strings.Split(inputRaw, ",")
+			inputRaws = strings.Split(inputRaw, ",")
 		}
 
 		var parseConst = func(c string) *ir.Const {
@@ -280,13 +295,29 @@ func parseAssertSection(raw string) *AssertFrame {
 		}
 
 		var inputConsts []*ir.Const
-		for _, input := range inputs {
+		for _, input := range inputRaws {
 			inputConsts = append(inputConsts, parseConst(input))
+		}
+
+		var outputConst *ir.Const
+		var errCode errors.ErrorCode
+		if strings.Index(outputRaw, "error") == 0 {
+			sep1 := strings.Index(outputRaw, "(")
+			sep2 := strings.Index(outputRaw, ")")
+			codeName := outputRaw[sep1+1 : sep2]
+			var ok bool
+			errCode, ok = errors.ErrorCodeMap[strings.ToUpper(codeName)]
+			if !ok {
+				panic("no defined errorcode found for " + codeName)
+			}
+		} else {
+			outputConst = parseConst(outputRaw)
 		}
 
 		return RunResult{
 			input:  inputConsts,
-			output: parseConst(output),
+			output: outputConst,
+			outerr: errCode,
 		}
 	}
 

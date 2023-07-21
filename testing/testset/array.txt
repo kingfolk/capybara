@@ -1,5 +1,5 @@
 //@val int(12)
-fun f(): int = { let a:array<int,3> = array<int>(1,2,3);a[0]<-10;a[0]+a[1] }
+fun f(): int = { let a:array<int,3> = array<int>(1,2,3);a[0]=10;a[0]+a[1] }
 $$
 
 /*@bb
@@ -58,9 +58,9 @@ f($v1){
 fun f(b:int): int = {
     let a:array<int,3> = array<int>(1,2,3);
     if b > 10 then
-        a[1] <- b+1
+        a[1] = b+1
     else
-        a[2] <- b-1;
+        a[2] = b-1;
     a[1]+a[2]
 }
 $$

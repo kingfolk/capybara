@@ -1,0 +1,32 @@
+//@val int(10)
+type person = rec{age:int};
+fun f1(): int = {
+    let b = person{age:10};
+    b.age
+}
+$$
+
+//@anon int(100)
+type person = rec{age:int};
+fun f2(): person = {
+    person{age:100}
+};
+let b = f2(); b.age
+$$
+
+//@anon int(101)
+type person = rec{age:int};
+fun f3(a:person): int = {
+    a.age
+};
+f3(person{age:101})
+$$
+
+//@val error(TYPE_INCOMPATIBLE_RECORD)
+type person = rec{age:int};
+type person1 = rec{age:int};
+fun f4(): int = {
+    let a = person{age:10};
+    let b:person1 = a;
+    b.age
+}

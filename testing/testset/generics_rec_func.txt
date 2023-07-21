@@ -1,0 +1,27 @@
+//@anon int(10)
+type person = rec[P]{age:P};
+fun f_g3(): person[int] = {
+    person[int]{age:10}
+};
+let a = f_g3();
+a.age
+$$
+
+//@anon int(10)
+type person = rec[P]{age:P};
+fun f_g1[T](a:T): person[T] = {
+    person[T]{age:a}
+};
+let a = f_g1[int](10);
+let aa:int = a.age;
+aa
+$$
+
+//@anon int(10)
+type person = rec[P]{age:P};
+fun f_g2[T](a:person[T]): T = {
+    a.age
+};
+let p = person[int]{age:10};
+f_g2[int](p)
+$$

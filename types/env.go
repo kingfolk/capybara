@@ -2,12 +2,15 @@ package types
 
 import (
 	"strconv"
-	"strings"
 )
 
 type (
+	TpBox []bool
+
 	Env struct {
-		DeclTable map[string]ValType
+		Types map[string]ValType
+		Defs  map[string]ValType
+		Boxes map[string]TpBox
 	}
 
 	ValType interface {
@@ -22,11 +25,30 @@ type (
 	Func struct {
 		Ret    ValType
 		Params []ValType
+		TpVars []*TypeVar
 	}
 
 	Arr struct {
 		Ele  ValType
 		Size int
+	}
+
+	Rec struct {
+		Uid    uint64
+		Keys   []string
+		MemTps []ValType
+		TpVars []*TypeVar
+		Substs []ValType
+	}
+
+	TypeVar struct {
+		Name string
+	}
+
+	App struct {
+		TpCon  ValType
+		TpArgs []ValType
+		Args   []ValType
 	}
 )
 
@@ -37,6 +59,9 @@ const (
 	TpFloat
 	TpFunc
 	TpArr
+	TpRec
+	TpVar
+	TpApp
 )
 
 var (
@@ -44,13 +69,36 @@ var (
 	Int   = &primitiveType{tp: TpInt}
 	Float = &primitiveType{tp: TpFloat}
 	Bool  = &primitiveType{tp: TpBool}
+
+	TpUidCounter uint64
 )
 
 var _ ValType = (*primitiveType)(nil)
 var _ ValType = (*Func)(nil)
+var _ ValType = (*TypeVar)(nil)
+
+func IsPrimitive(t ValType) bool {
+	_, ok := t.(*primitiveType)
+	return ok
+}
+
+func (e *Env) GetDefTrusted(ident string) ValType {
+	t, ok := e.GetDef(ident)
+	if !ok {
+		panic("undefined ident: " + ident)
+	}
+	return t
+}
+
+func (e *Env) GetDef(ident string) (ValType, bool) {
+	t, ok := e.Defs[ident]
+	return t, ok
+}
 
 func (t *primitiveType) String() string {
 	switch t.tp {
+	case TpUnit:
+		return "unit"
 	case TpInt:
 		return "int"
 	case TpFloat:
@@ -67,21 +115,102 @@ func (t *primitiveType) Code() int {
 }
 
 func (t *Arr) String() string {
-	return "vec<" + t.Ele.String() + ", " + strconv.Itoa(t.Size) + ">"
+	return "arr<" + t.Ele.String() + ", " + strconv.Itoa(t.Size) + ">"
 }
 
 func (t *Arr) Code() int {
 	return TpArr
 }
 
-func (t *Func) String() string {
-	params := make([]string, len(t.Params))
-	for i, p := range t.Params {
-		params[i] = p.String()
+func (t *Rec) String() string {
+	var str string
+	if len(t.TpVars) > 0 {
+		str += "<"
+		for i, tpVar := range t.TpVars {
+			if i > 0 {
+				str += ", "
+			}
+			str += tpVar.String()
+		}
+		str += ">"
 	}
-	return "(" + strings.Join(params, ", ") + ")" + "->" + t.Ret.String()
+	str += "{"
+	for i, key := range t.Keys {
+		if i > 0 {
+			str += ", "
+		}
+		str += key + ":" + t.MemTps[i].String()
+	}
+	return "rec" + str + "}"
+}
+
+func (t *Rec) Code() int {
+	return TpRec
+}
+
+func (t *Rec) KeyIndex(key string) int {
+	for i, k := range t.Keys {
+		if k == key {
+			return i
+		}
+	}
+	return -1
+}
+
+func (t *Func) String() string {
+	var str string
+	if len(t.TpVars) > 0 {
+		str += "<"
+		for i, tpVar := range t.TpVars {
+			if i > 0 {
+				str += ", "
+			}
+			str += tpVar.String()
+		}
+		str += ">"
+	}
+	for i, p := range t.Params {
+		if i > 0 {
+			str += ", "
+		}
+		str += p.String()
+	}
+	return "(" + str + ")" + "->" + t.Ret.String()
 }
 
 func (t *Func) Code() int {
 	return TpFunc
+}
+
+func (t *TypeVar) String() string {
+	return "'" + t.Name
+}
+
+func (t *TypeVar) Code() int {
+	return TpVar
+}
+
+func (t *App) String() string {
+	var str string
+	if len(t.TpArgs) > 0 {
+		str += "<"
+		for i, tpVar := range t.TpArgs {
+			if i > 0 {
+				str += ", "
+			}
+			str += tpVar.String()
+		}
+		str += ">"
+	}
+	for i, p := range t.Args {
+		if i > 0 {
+			str += ", "
+		}
+		str += p.String()
+	}
+	return "(" + t.TpCon.String() + ")" + str
+}
+
+func (t *App) Code() int {
+	return TpApp
 }

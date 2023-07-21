@@ -56,5 +56,5 @@ f($v1){
 */
 //@val int(9), [int(0)]
 //@val int(8), [int(1)]
-fun f(a:int): int = { let res = 0; for a < 3 { res = res+globalarr[a]; a = a+1 }; res }
+fun f(a:int): int = { let res = 0; for (a < 3) { res = res+globalarr[a]; a = a+1 }; res }
 $$

@@ -81,15 +81,30 @@ func (s *Symbol) IsIgnored() bool {
 }
 
 type Param struct {
+	Token *token.Token
 	Ident *Symbol
 	Type  Expr
 }
 
+func (p Param) Pos() locerr.Pos {
+	return p.Token.Start
+}
+
+func (p Param) End() locerr.Pos {
+	return p.Type.End()
+}
+
+type NamedArg struct {
+	Ident *Symbol
+	Arg   Expr
+}
+
 type FuncDef struct {
-	Symbol  *Symbol
-	Params  []Param
-	Body    []Expr
-	RetType Expr
+	Symbol   *Symbol
+	Params   []Param
+	TpParams []*Symbol
+	Body     []Expr
+	RetType  Expr
 }
 
 func (d *FuncDef) ParamSymbols() []*Symbol {
@@ -252,7 +267,13 @@ type (
 
 	Apply struct {
 		Callee Expr
+		TpArgs []Expr
 		Args   []Expr
+	}
+
+	ApplyBracket struct {
+		Expr Expr
+		Args []Expr
 	}
 
 	Tuple struct {
@@ -276,12 +297,20 @@ type (
 		Target     Expr
 	}
 
-	ArrayGet struct {
-		Array, Index Expr
-	}
-
 	ArrayPut struct {
 		Array, Index, Assignee Expr
+	}
+
+	RecLit struct {
+		Ref    *VarRef
+		TpArgs []Expr
+		Args   []NamedArg
+	}
+
+	RecAcs struct {
+		Expr     Expr
+		Acs      *Symbol
+		EndToken *token.Token
 	}
 
 	Match struct {
@@ -321,6 +350,7 @@ type (
 		StartToken *token.Token // Maybe nil
 		EndToken   *token.Token
 		ParamTypes []Expr
+		TpParams   []*Symbol
 		Ctor       *Symbol
 	}
 
@@ -574,6 +604,13 @@ func (e *Apply) End() locerr.Pos {
 	return e.Args[len(e.Args)-1].End()
 }
 
+func (e *ApplyBracket) Pos() locerr.Pos {
+	return e.Expr.Pos()
+}
+func (e *ApplyBracket) End() locerr.Pos {
+	return e.Args[len(e.Args)-1].End()
+}
+
 func (e *Tuple) Pos() locerr.Pos {
 	return e.Elems[0].Pos()
 }
@@ -602,18 +639,28 @@ func (e *ArraySize) End() locerr.Pos {
 	return e.Target.End()
 }
 
-func (e *ArrayGet) Pos() locerr.Pos {
-	return e.Array.Pos()
-}
-func (e *ArrayGet) End() locerr.Pos {
-	return e.Index.End()
-}
-
 func (e *ArrayPut) Pos() locerr.Pos {
 	return e.Array.Pos()
 }
 func (e *ArrayPut) End() locerr.Pos {
 	return e.Assignee.End()
+}
+
+func (e *RecLit) Pos() locerr.Pos {
+	return e.Ref.Pos()
+}
+
+func (e *RecLit) End() locerr.Pos {
+	last := e.Args[len(e.Args)-1]
+	return last.Arg.End()
+}
+
+func (e *RecAcs) Pos() locerr.Pos {
+	return e.Expr.Pos()
+}
+
+func (e *RecAcs) End() locerr.Pos {
+	return e.EndToken.End
 }
 
 func (e *Match) Pos() locerr.Pos {
@@ -735,6 +782,7 @@ func (e *LetRec) Name() string {
 }
 func (e *Apply) Name() string { return "Apply" }
 func (e *Tuple) Name() string { return "Tuple" }
+func (p Param) Name() string  { return "Param" }
 func (e *LetTuple) Name() string {
 	vars := e.Symbols[0].DisplayName
 	for _, s := range e.Symbols[1:] {
@@ -742,16 +790,18 @@ func (e *LetTuple) Name() string {
 	}
 	return fmt.Sprintf("LetTuple (%s)", vars)
 }
-func (e *ArrayMake) Name() string { return "ArrayCreate" }
-func (e *ArraySize) Name() string { return "ArraySize" }
-func (e *ArrayGet) Name() string  { return "ArrayGet" }
-func (e *ArrayPut) Name() string  { return "ArrayPut" }
-func (e *Match) Name() string     { return fmt.Sprintf("Match (%s)", e.SomeIdent.DisplayName) }
-func (e *Some) Name() string      { return "Some" }
-func (e *None) Name() string      { return "None" }
-func (e *ArrayLit) Name() string  { return fmt.Sprintf("ArrayLit (%d)", len(e.Elems)) }
-func (e *FuncType) Name() string  { return "FuncType" }
-func (e *TupleType) Name() string { return fmt.Sprintf("TupleType (%d)", len(e.ElemTypes)) }
+func (e *ArrayMake) Name() string    { return "ArrayCreate" }
+func (e *ArraySize) Name() string    { return "ArraySize" }
+func (e *ApplyBracket) Name() string { return "ApplyBracket" }
+func (e *ArrayPut) Name() string     { return "ArrayPut" }
+func (e *RecLit) Name() string       { return "RecLit" }
+func (e *RecAcs) Name() string       { return "RecAcs" }
+func (e *Match) Name() string        { return fmt.Sprintf("Match (%s)", e.SomeIdent.DisplayName) }
+func (e *Some) Name() string         { return "Some" }
+func (e *None) Name() string         { return "None" }
+func (e *ArrayLit) Name() string     { return fmt.Sprintf("ArrayLit (%d)", len(e.Elems)) }
+func (e *FuncType) Name() string     { return "FuncType" }
+func (e *TupleType) Name() string    { return fmt.Sprintf("TupleType (%d)", len(e.ElemTypes)) }
 func (e *CtorType) Name() string {
 	len := len(e.ParamTypes)
 	if len == 0 {

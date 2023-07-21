@@ -66,7 +66,7 @@ func GetRootModule() llvm.Module {
 }
 
 func BuildFunc(fn *ir.Func, debug bool, globals ...*ExtGlobal) llvm.Value {
-	builder := newBlockBuilder(&types.Env{DeclTable: fn.DeclTable}, debug)
+	builder := newBlockBuilder(&types.Env{Defs: fn.Defs}, debug)
 	for _, global := range globals {
 		builder.registers[global.Name] = global.Reg
 	}
@@ -75,7 +75,7 @@ func BuildFunc(fn *ir.Func, debug bool, globals ...*ExtGlobal) llvm.Value {
 
 func BuildModule(mod *ir.Module, debug bool) llvm.Value {
 	for _, fn := range mod.Funcs {
-		builder := newBlockBuilder(&types.Env{DeclTable: fn.DeclTable}, debug)
+		builder := newBlockBuilder(&types.Env{Defs: fn.Defs}, debug)
 		builder.buildFunc(fn.Body.Name, fn)
 	}
 	rootFnTp := &types.Func{
@@ -92,11 +92,16 @@ func BuildModule(mod *ir.Module, debug bool) llvm.Value {
 		}
 	}
 	rootFn := &ir.Func{
-		Body:      &rootBlk,
-		Tp:        rootFnTp,
-		DeclTable: mod.Env.DeclTable,
+		Body: &rootBlk,
+		Tp:   rootFnTp,
+		Defs: mod.Env.Defs,
 	}
 	builder := newBlockBuilder(mod.Env, debug)
+	fmt.Println("--- anon ---", len(rootBlk.Ins))
+	for _, i := range rootBlk.Ins {
+		fmt.Println(i.String())
+	}
+	fmt.Println("--- anon end ---")
 	return builder.buildFunc("root_anon", rootFn)
 }
 
@@ -135,7 +140,8 @@ var (
 	boolT llvm.Type = context.Int1Type()
 	intT  llvm.Type = context.Int32Type()
 	// TODO FLOAT?
-	floatT llvm.Type = context.DoubleType()
+	floatT   llvm.Type = context.DoubleType()
+	voidPtrT llvm.Type = llvm.PointerType(llvm.Int8Type(), 0)
 )
 
 type OptLevel int
@@ -209,12 +215,6 @@ func (b *blockBuilder) finalizePhi() {
 	}
 }
 
-func createEntryBlockAlloca(f llvm.Value, tp llvm.Type, name string) llvm.Value {
-	var tmpB = llvm.NewBuilder()
-	tmpB.SetInsertPoint(f.EntryBasicBlock(), f.EntryBasicBlock().FirstInstruction())
-	return tmpB.CreateAlloca(tp, name)
-}
-
 func (b *blockBuilder) buildFunc(name string, f *ir.Func) llvm.Value {
 	tpDef := f.Type()
 	funcType := buildFuncType(tpDef.(*types.Func))
@@ -231,9 +231,6 @@ func (b *blockBuilder) buildFunc(name string, f *ir.Func) llvm.Value {
 	args := theFunction.Params()
 	for i, paramName := range f.Params {
 		args[i].SetName(paramName)
-		argType := buildType(b.env.DeclTable[paramName])
-		alloca := createEntryBlockAlloca(theFunction, argType, paramName)
-		b.builder.CreateStore(args[i], alloca)
 		b.registers[paramName] = args[i]
 	}
 
@@ -251,7 +248,7 @@ func (b *blockBuilder) buildFunc(name string, f *ir.Func) llvm.Value {
 	b.finalizePhi()
 
 	if b.debug {
-		fmt.Println("--- theFunction.Dump()")
+		fmt.Println("--- theFunction.Dump() " + name)
 		theFunction.Dump()
 		fmt.Println("--- theFunction.Dump() done")
 	}
@@ -264,16 +261,13 @@ func (b *blockBuilder) buildFunc(name string, f *ir.Func) llvm.Value {
 	return theFunction
 }
 
-func (b *blockBuilder) buildArrMake(ident string, am *ir.ArrMake) llvm.Value {
-	t, ok := b.env.DeclTable[ident]
-	if !ok {
-		panic("ident not found: " + ident)
-	}
+func (b *blockBuilder) buildArrLit(ident string, al *ir.ArrLit) llvm.Value {
+	t := b.env.GetDefTrusted(ident)
 	elemTy := buildType(t.(*types.Arr).Ele)
-	sizeVal := llvm.ConstInt(intT, uint64(len(am.Args)), false /*signed*/)
+	sizeVal := llvm.ConstInt(intT, uint64(len(al.Args)), false /*signed*/)
 	alloca := b.builder.CreateArrayAlloca(elemTy, sizeVal, ident)
 
-	for i, elem := range am.Args {
+	for i, elem := range al.Args {
 		elemVal := b.resolve(elem)
 		al := b.builder.CreateInBoundsGEP(alloca, []llvm.Value{llvm.ConstInt(llvm.Int32Type(), uint64(i), false)}, "tmparr")
 		b.builder.CreateStore(elemVal, al)
@@ -296,10 +290,142 @@ func (b *blockBuilder) buildArrPut(ident string, ap *ir.ArrPut) llvm.Value {
 	return b.builder.CreateStore(rightVal, elemPtr)
 }
 
+func (b *blockBuilder) buildRecLit(ident string, rl *ir.RecLit) llvm.Value {
+	t := b.env.GetDefTrusted(ident)
+	tp := buildType(t)
+	alloca := b.builder.CreateAlloca(tp, ident)
+
+	for i, elem := range rl.Args {
+		elemVal := b.resolve(elem)
+		b.buildRecStore(alloca, elemVal, i)
+	}
+	return alloca
+}
+
+func (b *blockBuilder) buildRecAcs(ident string, ra *ir.RecAcs) llvm.Value {
+	recVal := b.resolve(ra.Rec)
+	return b.buildRecLoad(recVal, ra.Idx)
+}
+
+func (b *blockBuilder) buildRecStore(recVal, elemVal llvm.Value, idx int) {
+	ptr := b.builder.CreateStructGEP(recVal, idx, "rec")
+	b.builder.CreateStore(elemVal, ptr)
+}
+
+func (b *blockBuilder) buildRecLoad(recVal llvm.Value, idx int) llvm.Value {
+	elemPtr := b.builder.CreateStructGEP(recVal, idx, "")
+	return b.builder.CreateLoad(elemPtr, "recaccess")
+}
+
+func (b *blockBuilder) buildPtr(v llvm.Value, tp types.ValType) llvm.Value {
+	switch tp {
+	case types.Int:
+		return b.builder.CreateIntToPtr(v, llvm.PointerType(intT, 0), "")
+	case types.Float:
+		// return b.builder.CreatePtr(v, llvm.PointerType(intT, 0), "")
+		panic("TODO")
+	default:
+		return v
+	}
+}
+
+func (b *blockBuilder) box(v llvm.Value, tp, boxedTp types.ValType) llvm.Value {
+	if boxedTp.Code() == types.TpVar {
+		return b.boxWhole(v, tp)
+	}
+	return b.boxRec(v, tp, boxedTp)
+}
+
+func (b *blockBuilder) boxWhole(v llvm.Value, tp types.ValType) llvm.Value {
+	v = b.buildPtr(v, tp)
+	return b.builder.CreateBitCast(v, voidPtrT, "")
+}
+
+func (b *blockBuilder) boxRec(v llvm.Value, tp, boxedTp types.ValType) llvm.Value {
+	t := buildType(boxedTp)
+	boxed := b.builder.CreateAlloca(t, "")
+
+	for i, t := range boxedTp.(*types.Rec).MemTps {
+		unboxedTp := tp.(*types.Rec).MemTps[i]
+		ele := b.buildRecLoad(v, i)
+		var arg llvm.Value
+		switch t.(type) {
+		case *types.TypeVar:
+			arg = b.boxWhole(ele, unboxedTp)
+		case *types.Rec:
+			arg = b.boxRec(ele, unboxedTp, t)
+		default:
+			panic("TODO")
+		}
+		b.buildRecStore(boxed, arg, i)
+	}
+	return boxed
+}
+
+func (b *blockBuilder) unboxWhole(v llvm.Value, tp types.ValType) llvm.Value {
+	t := buildType(tp)
+	if tp.Code() == types.TpVar {
+		t = intT
+	}
+
+	ptrTp := llvm.PointerType(t, 0)
+	v = b.builder.CreateBitCast(v, ptrTp, "")
+	switch tp.Code() {
+	case types.TpInt, types.TpVar:
+		return b.builder.CreatePtrToInt(v, t, "")
+	case types.TpFloat:
+		panic("TODO")
+	default:
+		return v
+	}
+}
+
+func (b *blockBuilder) unbox(v llvm.Value, tp, boxedTp types.ValType) llvm.Value {
+	if boxedTp.Code() == types.TpVar {
+		return b.unboxWhole(v, tp)
+	}
+	return b.unboxRec(v, tp, boxedTp)
+}
+
+func (b *blockBuilder) unboxRec(v llvm.Value, tp, boxedTp types.ValType) llvm.Value {
+	allPrimitive := true
+	for _, t := range boxedTp.(*types.Rec).MemTps {
+		if !types.IsPrimitive(t) {
+			allPrimitive = false
+		}
+	}
+	if allPrimitive {
+		return v
+	}
+
+	t := buildType(tp)
+	unboxed := b.builder.CreateAlloca(t, "")
+	for i, t := range boxedTp.(*types.Rec).MemTps {
+		unboxedTp := tp.(*types.Rec).MemTps[i]
+		ele := b.buildRecLoad(v, i)
+		var arg llvm.Value
+		switch t.(type) {
+		case *types.TypeVar:
+			arg = b.unboxWhole(ele, unboxedTp)
+		case *types.Rec:
+			arg = b.unboxRec(ele, unboxedTp, t)
+		default:
+			panic("TODO")
+		}
+		b.buildRecStore(unboxed, arg, i)
+	}
+	return unboxed
+}
+
 func (b *blockBuilder) buildCall(c *ir.Call) llvm.Value {
 	args := make([]llvm.Value, len(c.Args))
 	for i, arg := range c.Args {
-		args[i] = b.resolve(arg)
+		v := b.resolve(arg)
+		if boxedTp := c.Boxes[i]; boxedTp != nil {
+			tp := b.env.GetDefTrusted(arg)
+			v = b.box(v, tp, boxedTp)
+		}
+		args[i] = v
 	}
 
 	f := rootModule.NamedFunction(c.Name)
@@ -307,6 +433,9 @@ func (b *blockBuilder) buildCall(c *ir.Call) llvm.Value {
 		panic("function " + c.Name + " not found in llvm module")
 	}
 	ret := b.builder.CreateCall(f, args, "")
+	if boxedTp := c.Boxes[len(c.Boxes)-1]; boxedTp != nil {
+		return b.unbox(ret, c.Tp, boxedTp)
+	}
 	return ret
 }
 
@@ -365,6 +494,15 @@ func (b *blockBuilder) buildIf(ident string, it *ir.If) llvm.Value {
 	return llvm.ConstNull(intT)
 }
 
+func buildTypePtr(tp types.ValType) llvm.Type {
+	if tp.Code() == types.TpRec || tp.Code() == types.TpArr {
+		return llvm.PointerType(buildType(tp), 0)
+	}
+	return buildType(tp)
+}
+
+// TODO rec类型在llvm类型推断系统里应该被pointer封装，但是在alloca时则不需要，所以独立了一个buildTypePtr
+// 这部分的区分逻辑需要优化的写法
 func buildType(tp types.ValType) llvm.Type {
 	switch tp.Code() {
 	case types.TpBool:
@@ -373,12 +511,21 @@ func buildType(tp types.ValType) llvm.Type {
 		return intT
 	case types.TpFloat:
 		return floatT
+	case types.TpVar:
+		return voidPtrT
 	case types.TpArr:
 		arrTp := tp.(*types.Arr)
 		return context.StructType([]llvm.Type{
 			llvm.PointerType(buildType(arrTp.Ele), 0),
 			intT,
 		}, false)
+	case types.TpRec:
+		recTp := tp.(*types.Rec)
+		tps := []llvm.Type{}
+		for _, tp := range recTp.MemTps {
+			tps = append(tps, buildType(tp))
+		}
+		return context.StructType(tps, false)
 	case types.TpFunc:
 		return buildFuncType(tp.(*types.Func))
 	default:
@@ -387,7 +534,7 @@ func buildType(tp types.ValType) llvm.Type {
 }
 
 func (b *blockBuilder) typeOf(ident string) types.ValType {
-	if t, ok := b.env.DeclTable[ident]; ok {
+	if t, ok := b.env.Defs[ident]; ok {
 		return t
 	}
 	panic("Type was not found for ident: " + ident)
@@ -396,9 +543,10 @@ func (b *blockBuilder) typeOf(ident string) types.ValType {
 func buildFuncType(tp *types.Func) llvm.Type {
 	params := make([]llvm.Type, len(tp.Params))
 	for i, param := range tp.Params {
-		params[i] = buildType(param)
+		params[i] = buildTypePtr(param)
 	}
-	return llvm.FunctionType(buildType(tp.Ret), params, false)
+	retTp := buildTypePtr(tp.Ret)
+	return llvm.FunctionType(retTp, params, false)
 }
 
 func (b *blockBuilder) resolve(ident string) llvm.Value {
@@ -552,12 +700,16 @@ func (b *blockBuilder) buildVal(ident string, v ir.Val) llvm.Value {
 	case *ir.If:
 		// TODO: a = if ... then to if {}
 		return b.buildIf(ident, expr)
-	case *ir.ArrMake:
-		return b.buildArrMake(ident, expr)
+	case *ir.ArrLit:
+		return b.buildArrLit(ident, expr)
 	case *ir.ArrGet:
 		return b.buildArrGet(ident, expr)
 	case *ir.ArrPut:
 		return b.buildArrPut(ident, expr)
+	case *ir.RecLit:
+		return b.buildRecLit(ident, expr)
+	case *ir.RecAcs:
+		return b.buildRecAcs(ident, expr)
 	case *ir.Func:
 		// TODO: i.Ident应该是需要隐藏的，函数名应该放在ir.Fun里
 		// TODO 到底用ident还是expr.Body.Name
