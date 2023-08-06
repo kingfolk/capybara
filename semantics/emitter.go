@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/kingfolk/capybara/ast"
+	"github.com/kingfolk/capybara/errors"
 	"github.com/kingfolk/capybara/ir"
 	"github.com/kingfolk/capybara/types"
 )
@@ -48,7 +49,8 @@ func EmitIR(mod *ast.AST, debugMode bool, globals ...GlobalDef) (root *ir.Module
 		debug: debugMode,
 		count: 0,
 		env: &types.Env{
-			DeclTable: map[string]types.ValType{},
+			Types: map[string]types.ValType{},
+			Defs:  map[string]types.ValType{},
 		},
 		globals: map[string]types.ValType{},
 		scope:   NewScope(),
@@ -58,14 +60,23 @@ func EmitIR(mod *ast.AST, debugMode bool, globals ...GlobalDef) (root *ir.Module
 	defer func() {
 		if message := recover(); message != nil {
 			debug.PrintStack()
-			err = fmt.Errorf("Emit fail. %v", message)
+			if er, ok := message.(error); ok {
+				err = er
+			} else {
+				err = fmt.Errorf("%s", message)
+			}
 		}
 	}()
 
 	for _, g := range globals {
 		e.globals[g.Name] = g.Tp
-		e.env.DeclTable[g.Name] = g.Tp
+		e.env.Defs[g.Name] = g.Tp
 		e.scope.vars[g.Name] = g.Name
+	}
+
+	for _, tDecl := range mod.TypeDecls {
+		tp := e.emitType(tDecl.Type)
+		e.env.Types[tDecl.Ident.Name] = tp
 	}
 
 	blk := e.emitBlock(rootBlock, mod.Root...)
@@ -76,10 +87,17 @@ func EmitIR(mod *ast.AST, debugMode bool, globals ...GlobalDef) (root *ir.Module
 		}
 	}
 
+	if e.debug {
+		fmt.Println("--- original anon bb ---")
+		fmt.Println(ir.CFGString(blk))
+		fmt.Println("--- original anon bb end ---")
+	}
+
 	maker := ir.NewDominatorMaker(blk, e.debug)
-	maker.Lift(e.env.DeclTable)
+	declTable := maker.Lift(e.env.Defs)
 	root = e.module
 	root.Env = e.env
+	root.Env.Defs = declTable
 	em = e
 
 	return
@@ -90,12 +108,12 @@ func EmitIRWithGlobal(mod *ast.AST, globalVars map[string]types.ValType) (*ir.Bl
 	e := &Emitter{
 		count: 0,
 		env: &types.Env{
-			DeclTable: map[string]types.ValType{},
+			Defs: map[string]types.ValType{},
 		},
 		scope: NewScope(),
 	}
 	for k, t := range globalVars {
-		e.env.DeclTable[k] = t
+		e.env.Defs[k] = t
 		e.scope.vars[k] = k
 	}
 	return e.emitBlock(rootBlock, mod.Root...), e.env
@@ -136,7 +154,7 @@ func (e *Emitter) emitInsn(node ast.Expr) *ir.Instr {
 	case *ast.VarRef:
 		// TODO NESTED SCOPE
 		if ident, ok := e.scope.vars[n.Symbol.Name]; ok {
-			tp := e.env.DeclTable[ident]
+			tp := e.env.GetDefTrusted(ident)
 			insn := e.rvalInstr(ir.NewRef(tp, ident))
 			return insn
 		}
@@ -167,10 +185,14 @@ func (e *Emitter) emitInsn(node ast.Expr) *ir.Instr {
 		return e.emitLogicalInsn(ir.OR, n.Left, n.Right, node)
 	case *ast.ArrayLit:
 		return e.emitArrLitInsn(n)
-	case *ast.ArrayGet:
+	case *ast.ApplyBracket:
 		return e.emitArrGetInsn(n)
 	case *ast.ArrayPut:
 		return e.emitArrPutInsn(n)
+	case *ast.RecLit:
+		return e.emitRecLitInsn(n)
+	case *ast.RecAcs:
+		return e.emitRecAcsInsn(n)
 	case *ast.Apply:
 		return e.emitAppInsn(n)
 	case *ast.If:
@@ -214,7 +236,7 @@ func (e *Emitter) emitLogicalInsn(op ir.OperatorKind, lhs, rhs, node ast.Expr) *
 
 func TypeCheckEqual(l, r types.ValType) {
 	if l != r {
-		panic("TypeError: type mismatch")
+		panic(fmt.Sprintf("TypeError: type mismatch. %s and %s", l, r))
 	}
 }
 
@@ -234,7 +256,11 @@ func (e *Emitter) emitLetInsn(node *ast.Let) *ir.Instr {
 
 	if node.Type != nil {
 		tp := e.emitType(node.Type)
-		e.env.DeclTable[node.Symbol.Name] = tp
+		e.env.Defs[node.Symbol.Name] = tp
+		right := e.env.GetDefTrusted(bound.Ident)
+		if err := types.TypeCompatible(tp, right); err != nil {
+			panic(err)
+		}
 	}
 	return bound
 }
@@ -314,14 +340,18 @@ func (e *Emitter) emitFunInsn(node *ast.LetRec) *ir.Instr {
 
 	params := make([]string, 0, len(node.Func.Params))
 	paramTypes := make([]types.ValType, len(node.Func.Params))
+	tpVars := make([]*types.TypeVar, len(node.Func.TpParams))
 	for i, param := range node.Func.Params {
 		paramName := param.Ident.Name
 		ident := e.genID()
 		params = append(params, ident)
 		tp := e.emitType(param.Type)
 		paramTypes[i] = tp
-		e.env.DeclTable[ident] = tp
+		e.env.Defs[ident] = tp
 		e.scope.vars[paramName] = ident
+	}
+	for i, tpParam := range node.Func.TpParams {
+		tpVars[i] = &types.TypeVar{Name: tpParam.Name}
 	}
 	blkName := name
 	blk := e.emitBlock(blkName, node.Func.Body...)
@@ -334,6 +364,28 @@ func (e *Emitter) emitFunInsn(node *ast.LetRec) *ir.Instr {
 	funTp := &types.Func{
 		Params: paramTypes,
 		Ret:    e.emitType(node.Func.RetType),
+		TpVars: tpVars,
+	}
+
+	stack := []*ir.Block{blk}
+	visited := map[int]bool{}
+	for len(stack) > 0 {
+		top := stack[0]
+		visited[top.Id] = true
+		if top.Dest == nil && len(top.Ins) > 0 {
+			last := top.Ins[len(top.Ins)-1]
+			retTp := e.env.GetDefTrusted(last.Ident)
+			if err := types.TypeCompatible(funTp.Ret, retTp); err != nil {
+				panic(err)
+			}
+		}
+		stack = stack[1:]
+		for _, b := range top.Dest {
+			if visited[b.Id] {
+				continue
+			}
+			stack = append(stack, b)
+		}
 	}
 
 	val := &ir.Func{
@@ -343,8 +395,8 @@ func (e *Emitter) emitFunInsn(node *ast.LetRec) *ir.Instr {
 	}
 
 	maker := ir.NewDominatorMaker(blk, e.debug, params...)
-	declTable := maker.Lift(e.env.DeclTable)
-	val.DeclTable = declTable
+	defs := maker.Lift(e.env.Defs)
+	val.Defs = defs
 
 	e.scope = origScope
 	return e.instr(val, name, ir.FuncKind)
@@ -356,24 +408,21 @@ func (e *Emitter) emitArrLitInsn(node *ast.ArrayLit) *ir.Instr {
 		arg := e.emitInsn(ele)
 		args[i] = arg.Ident
 	}
-	tp, ok := e.env.DeclTable[args[0]]
-	if !ok {
-		panic("arg0 not found: " + args[0])
-	}
-	val := &ir.ArrMake{
+	tp := e.env.GetDefTrusted(args[0])
+	val := &ir.ArrLit{
 		Tp:   tp,
 		Args: args,
 	}
 	return e.rvalInstr(val)
 }
 
-func (e *Emitter) emitArrGetInsn(node *ast.ArrayGet) *ir.Instr {
-	arr := e.emitInsn(node.Array)
-	index := e.emitInsn(node.Index)
-	tp, ok := e.env.DeclTable[arr.Ident]
-	if !ok {
-		panic("arr not found: " + arr.Ident)
+func (e *Emitter) emitArrGetInsn(node *ast.ApplyBracket) *ir.Instr {
+	arr := e.emitInsn(node.Expr)
+	if len(node.Args) != 1 {
+		panic("unreachable. parser should have handled more than one subscript arg")
 	}
+	index := e.emitInsn(node.Args[0])
+	tp := e.env.GetDefTrusted(arr.Ident)
 	eleTp := tp.(*types.Arr).Ele
 	val := &ir.ArrGet{
 		Tp:    eleTp,
@@ -396,25 +445,103 @@ func (e *Emitter) emitArrPutInsn(node *ast.ArrayPut) *ir.Instr {
 	return e.instr(val, e.genID(), ir.CallKind)
 }
 
+func (e *Emitter) emitRecLitInsn(node *ast.RecLit) *ir.Instr {
+	tp, ok := e.env.Types[node.Ref.Symbol.Name]
+	if !ok {
+		panic("TypeError: undeclared type of " + node.Ref.Symbol.Name)
+	}
+	tRec := tp.(*types.Rec)
+	args := make([]string, len(tRec.Keys))
+	argTps := make([]types.ValType, len(tRec.Keys))
+	if len(node.Args) != len(tRec.Keys) {
+		panic(errors.NewError(errors.TYPE_RECORD_NOT_FULFILLED, "struct literal not fulfilled"))
+	}
+	for _, arg := range node.Args {
+		idx := tRec.KeyIndex(arg.Ident.Name)
+		if idx == -1 {
+			panic(errors.NewError(errors.TYPE_RECORD_KEY_NOTFOUND, "struct key "+arg.Ident.Name+" not found"))
+		}
+		if entry := args[idx]; entry != "" {
+			panic(errors.NewError(errors.TYPE_RECORD_NOT_FULFILLED, "struct literal not fulfilled"))
+		}
+		i := e.emitInsn(arg.Arg)
+		args[idx] = i.Ident
+		tpArg := e.env.GetDefTrusted(i.Ident)
+		argTps[idx] = tpArg
+	}
+	var tpArgs []types.ValType
+	for _, tpArg := range node.TpArgs {
+		tpArgs = append(tpArgs, e.emitType(tpArg))
+	}
+	tRec, err := types.TypeCheckRecLit(tRec, tpArgs, argTps)
+	if err != nil {
+		panic(err)
+	}
+	val := &ir.RecLit{
+		Tp:   tRec,
+		Args: args,
+	}
+	return e.rvalInstr(val)
+}
+
+func (e *Emitter) emitRecAcsInsn(node *ast.RecAcs) *ir.Instr {
+	rec := e.emitInsn(node.Expr)
+	t := e.env.GetDefTrusted(rec.Ident)
+	tRec, ok := t.(*types.Rec)
+	if !ok {
+		panic("rec access apply on non-rec type: " + t.String())
+	}
+	idx := tRec.KeyIndex(node.Acs.Name)
+	val := &ir.RecAcs{
+		Tp:  tRec.MemTps[idx],
+		Rec: rec.Ident,
+		Idx: idx,
+	}
+	return e.rvalInstr(val)
+}
+
 func (e *Emitter) emitAppInsn(node *ast.Apply) *ir.Instr {
 	ref, ok := node.Callee.(*ast.VarRef)
 	if !ok {
 		panic("unsupported apply instr")
 	}
-	t, ok := e.env.DeclTable[ref.Symbol.Name]
+	t := e.env.GetDefTrusted(ref.Symbol.Name)
+	tFun, ok := t.(*types.Func)
 	if !ok {
-		panic("func not exists: " + ref.Symbol.Name)
+		panic("APPLY not to func type: " + ref.Symbol.Name)
 	}
 
 	args := make([]string, len(node.Args))
+	argTps := make([]types.ValType, len(node.Args))
+	boxes := make([]types.ValType, len(node.Args)+1)
 	for i, arg := range node.Args {
 		arg := e.emitInsn(arg)
 		args[i] = arg.Ident
+		if types.HasTpVar(tFun.Params[i]) {
+			boxes[i] = tFun.Params[i]
+		}
+		argTp := e.env.GetDefTrusted(arg.Ident)
+		argTps[i] = argTp
 	}
+	if types.HasTpVar(tFun.Ret) {
+		boxes[len(boxes)-1] = tFun.Ret
+	}
+
+	var tpArgs []types.ValType
+	for _, tpArg := range node.TpArgs {
+		tpArgs = append(tpArgs, e.emitType(tpArg))
+	}
+
+	tFun, err := types.TypeCheckApp(tFun, tpArgs, argTps)
+	if err != nil {
+		panic(err)
+	}
+
 	val := &ir.Call{
-		Name: ref.Symbol.Name,
-		Tp:   t.(*types.Func).Ret,
-		Args: args,
+		Name:  ref.Symbol.Name,
+		Tp:    tFun.Ret,
+		Args:  args,
+		Boxes: boxes,
 	}
 
 	return e.rvalInstr(val)
@@ -425,7 +552,7 @@ func (e *Emitter) rvalInstr(val ir.Val) *ir.Instr {
 }
 
 func (e *Emitter) instr(val ir.Val, ident string, kind int) *ir.Instr {
-	e.env.DeclTable[ident] = val.Type()
+	e.env.Defs[ident] = val.Type()
 	it := &ir.Instr{
 		Ident: ident,
 		Kind:  kind,
@@ -441,24 +568,66 @@ func (e *Emitter) genID() string {
 }
 
 func (e *Emitter) emitType(node ast.Expr) types.ValType {
+	primitiveMap := map[string]types.ValType{
+		"unit":  types.Unit,
+		"int":   types.Int,
+		"uint":  types.Unit,
+		"float": types.Float,
+		"bool":  types.Bool,
+	}
+
+	if v, ok := node.(*ast.VarRef); ok {
+		if t, ok := primitiveMap[v.Symbol.Name]; ok {
+			return t
+		}
+		return &types.TypeVar{Name: v.Symbol.Name}
+	}
+
 	switch n := node.(type) {
 	case *ast.CtorType:
 		switch n.Ctor.Name {
 		case "array":
-			ele := e.emitType(n.ParamTypes[0])
+			ele := e.emitType(n.ParamTypes[0].(ast.Expr))
 			size := n.ParamTypes[1].(*ast.Int).Value
 			return &types.Arr{
 				Ele:  ele,
 				Size: int(size),
 			}
-		case "int":
-			return types.Int
-		case "float":
-			return types.Float
-		case "bool":
-			return types.Bool
-		case "unit":
-			return types.Unit
+		case "rec":
+			var typeVars []*types.TypeVar
+			var keys []string
+			var memTps []types.ValType
+			for _, a := range n.TpParams {
+				typeVars = append(typeVars, &types.TypeVar{Name: a.Name})
+			}
+			for _, p := range n.ParamTypes {
+				param := p.(ast.Param)
+				keys = append(keys, param.Ident.Name)
+				memTps = append(memTps, e.emitType(param.Type))
+			}
+			types.TpUidCounter++
+			return &types.Rec{
+				Uid:    types.TpUidCounter,
+				Keys:   keys,
+				MemTps: memTps,
+				TpVars: typeVars,
+			}
+		default:
+			if t, ok := e.env.Types[n.Ctor.Name]; ok {
+				var tpArgs []types.ValType
+				for _, p := range n.ParamTypes {
+					tpArgs = append(tpArgs, e.emitType(p))
+				}
+				t, err := types.SubstRoot(t, tpArgs)
+				if err != nil {
+					panic(err)
+				}
+				return t
+			}
+			if t, ok := primitiveMap[n.Ctor.Name]; ok {
+				return t
+			}
+			return &types.TypeVar{Name: n.Ctor.Name}
 		}
 	}
 	panic(fmt.Sprintf("unsupported type: %+v\n", node))

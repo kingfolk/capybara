@@ -1,0 +1,32 @@
+//@val error(TYPE_SUBSTITUTE_NUM_MISMATCH)
+type person = rec[P]{age:P};
+fun f_e1(): int = {
+    let a = person{age:1};
+    1
+}
+$$
+
+//@val error(TYPE_SUBSTITUTE_NUM_MISMATCH)
+type person = rec[P]{age:P};
+fun f_e2(): int = {
+    let a:person = person[int]{age:1};
+    1
+}
+$$
+
+//@val error(TYPE_INCOMPATIBLE_RECORD)
+type person = rec[P]{age:P};
+type person1 = rec{age:int};
+fun f_e3(): int = {
+    let a:person[int] = person1{age:1};
+    1
+}
+$$
+
+//@anon error(TYPE_INCOMPATIBLE_RECORD)
+type person = rec[P]{age:P};
+fun f_g1[T](): person[T] = {
+    person[int]{age:10}
+};
+let a = f_g1[int]();
+a.age

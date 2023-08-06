@@ -1,0 +1,6 @@
+//@anon int(10)
+type person = rec{age:int};
+fun f_g[T](a:T): T = {
+    a
+};
+f_g[int](10)

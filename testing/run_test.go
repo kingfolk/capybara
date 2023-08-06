@@ -38,6 +38,6 @@ func TestCompileAndRunAll(t *testing.T) {
 }
 
 func TestCompileAndRunOne(t *testing.T) {
-	filename := "./testset/loop.txt"
+	filename := "./testset/record_error.txt"
 	RunTest(t, true, filename)
 }

@@ -1,0 +1,7 @@
+//@anon error(TYPE_INCOMPATIBLE_RECORD)
+type person = rec[P]{age:P};
+fun f_g1[T](): person[T] = {
+    person[int]{age:10}
+};
+let a = f_g1[int](10);
+a.age

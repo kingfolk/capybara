@@ -126,9 +126,11 @@ func Visit(vis Visitor, e Expr) {
 		Visit(v, n.Elem)
 	case *ArraySize:
 		Visit(v, n.Target)
-	case *ArrayGet:
-		Visit(v, n.Array)
-		Visit(v, n.Index)
+	case *ApplyBracket:
+		Visit(v, n.Expr)
+		for _, e := range n.Args {
+			Visit(v, e)
+		}
 	case *ArrayPut:
 		Visit(v, n.Array)
 		Visit(v, n.Index)

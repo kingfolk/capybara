@@ -92,13 +92,14 @@ type (
 		Body        *Block
 		Tp          types.ValType
 		IsRecursive bool
-		DeclTable   map[string]types.ValType
+		Defs        map[string]types.ValType
 	}
 
 	Call struct {
-		Name string
-		Tp   types.ValType
-		Args []string
+		Name  string
+		Tp    types.ValType
+		Args  []string
+		Boxes []types.ValType
 	}
 
 	Phi struct {
@@ -113,7 +114,7 @@ type (
 		Val   Val
 	}
 
-	ArrMake struct {
+	ArrLit struct {
 		Tp   types.ValType
 		Args []string
 	}
@@ -125,6 +126,17 @@ type (
 
 	ArrPut struct {
 		Arr, Index, Right string
+	}
+
+	RecLit struct {
+		Tp   *types.Rec
+		Args []string
+	}
+
+	RecAcs struct {
+		Tp  types.ValType
+		Rec string
+		Idx int
 	}
 )
 
@@ -274,15 +286,15 @@ func (e *Call) String() string {
 	return e.Name + "(" + strings.Join(e.Args, ", ") + ") "
 }
 
-func (e *ArrMake) Kind() int {
+func (e *ArrLit) Kind() int {
 	return CallKind
 }
 
-func (e *ArrMake) Type() types.ValType {
+func (e *ArrLit) Type() types.ValType {
 	return &types.Arr{Ele: e.Tp, Size: len(e.Args)}
 }
 
-func (e *ArrMake) String() string {
+func (e *ArrLit) String() string {
 	return "ArrMake<" + e.Tp.String() + ">(" + strings.Join(e.Args, ", ") + ") "
 }
 
@@ -308,6 +320,30 @@ func (e *ArrPut) Type() types.ValType {
 
 func (e *ArrPut) String() string {
 	return e.Arr + "[" + e.Index + "] <- " + e.Right
+}
+
+func (e *RecLit) Kind() int {
+	return CallKind
+}
+
+func (e *RecLit) Type() types.ValType {
+	return e.Tp
+}
+
+func (e *RecLit) String() string {
+	return "RecLit(" + strings.Join(e.Args, ", ") + ") "
+}
+
+func (e *RecAcs) Kind() int {
+	return CallKind
+}
+
+func (e *RecAcs) Type() types.ValType {
+	return e.Tp
+}
+
+func (e *RecAcs) String() string {
+	return e.Rec + "." + strconv.Itoa(e.Idx)
 }
 
 func (e *Func) Kind() int {
