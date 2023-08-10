@@ -199,6 +199,11 @@ type domFrontier [][]*Block
 
 func (df domFrontier) add(u, v *Block) {
 	p := &df[u.Id]
+	for _, a := range *p {
+		if a.Id == v.Id {
+			return
+		}
+	}
 	*p = append(*p, v)
 }
 
@@ -337,7 +342,7 @@ func (r *renamingStack) stackSymbol(symbol string) string {
 	}
 	// 当symbol不为'$'开头时，则为global变量，不进行重命名。
 	if symbol[0] == '$' {
-		return dangleIdent
+		return DangleIdent()
 	}
 	return symbol
 }
@@ -405,7 +410,15 @@ func (m *DominatorMaker) renameBlock(block *Block, renaming *renamingStack) {
 					i.Args[idx] = renaming.stackSymbol(arg)
 				}
 			case *RecAcs:
-				i.Rec = renaming.stackSymbol(i.Rec)
+				i.Target = renaming.stackSymbol(i.Target)
+			case *EnumVar:
+				if i.Box != "" {
+					i.Box = renaming.stackSymbol(i.Box)
+				}
+			case *Discriminant:
+				i.Target = renaming.stackSymbol(i.Target)
+			case *Unbox:
+				i.Target = renaming.stackSymbol(i.Target)
 			}
 			renaming.push(ir.Ident)
 			ir.Ident = renaming.stackSymbol(ir.Ident)
@@ -484,7 +497,7 @@ func (m *DominatorMaker) removeIneffective() {
 				var effectCount int
 				// var effectIdent string
 				for _, edge := range v.Edges {
-					if edge != dangleIdent {
+					if !IsDangle(edge) {
 						effectCount++
 						// effectIdent = edge
 					}
@@ -508,8 +521,8 @@ func (m *DominatorMaker) Lift(declTable map[string]types.ValType) map[string]typ
 
 	if m.debug {
 		fmt.Println("--- dominator tree ---")
-		for i, b := range m.allBlocks {
-			fmt.Print(i, ": ")
+		for _, b := range m.allBlocks {
+			fmt.Print(b.Id, ": ")
 			for _, c := range b.dom.children {
 				fmt.Print(c.Id, " ")
 			}
@@ -531,6 +544,13 @@ func (m *DominatorMaker) Lift(declTable map[string]types.ValType) map[string]typ
 	}
 
 	m.placePhi(df)
+
+	if m.debug {
+		fmt.Println("--- after place phi ---")
+		rb := CFGString(m.rootBlock)
+		fmt.Println(rb)
+		fmt.Println("--- after place phi end ---")
+	}
 
 	newDecls := m.rename(declTable)
 

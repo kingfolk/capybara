@@ -15,6 +15,7 @@ import (
 	"unsafe"
 
 	"github.com/kingfolk/capybara/ir"
+	"github.com/kingfolk/capybara/semantics"
 	"github.com/kingfolk/capybara/types"
 
 	"github.com/llvm/llvm-project/bindings/go/llvm"
@@ -205,9 +206,17 @@ func (b *blockBuilder) finalizePhi() {
 		var edgeBlks []llvm.BasicBlock
 		for i, edge := range phi.ins.Edges {
 			if ir.IsDangle(edge) {
-				continue
+				switch phi.ins.Type().Code() {
+				case types.TpBool:
+					edgeVars = append(edgeVars, llvm.ConstNull(boolT))
+				case types.TpUnit, types.TpInt:
+					edgeVars = append(edgeVars, llvm.ConstNull(intT))
+				default:
+					panic("TODO: phi " + phi.ins.String() + ". type:" + phi.ins.Type().String())
+				}
+			} else {
+				edgeVars = append(edgeVars, b.registers[edge])
 			}
-			edgeVars = append(edgeVars, b.registers[edge])
 			src := phi.blk.Src[i]
 			edgeBlks = append(edgeBlks, b.buildCtx.blkMap[src.Id])
 		}
@@ -303,7 +312,7 @@ func (b *blockBuilder) buildRecLit(ident string, rl *ir.RecLit) llvm.Value {
 }
 
 func (b *blockBuilder) buildRecAcs(ident string, ra *ir.RecAcs) llvm.Value {
-	recVal := b.resolve(ra.Rec)
+	recVal := b.resolve(ra.Target)
 	return b.buildRecLoad(recVal, ra.Idx)
 }
 
@@ -315,6 +324,36 @@ func (b *blockBuilder) buildRecStore(recVal, elemVal llvm.Value, idx int) {
 func (b *blockBuilder) buildRecLoad(recVal llvm.Value, idx int) llvm.Value {
 	elemPtr := b.builder.CreateStructGEP(recVal, idx, "")
 	return b.builder.CreateLoad(elemPtr, "recaccess")
+}
+
+func (b *blockBuilder) buildEnumVar(ident string, ev *ir.EnumVar) llvm.Value {
+	if ev.Tp.Simple {
+		return llvm.ConstInt(intT, uint64(ev.Idx), false)
+	}
+
+	tp := buildType(semantics.EnumBox)
+	idxVal := llvm.ConstInt(intT, uint64(ev.Idx), false)
+	alloca := b.builder.CreateAlloca(tp, ident)
+	b.buildRecStore(alloca, idxVal, 0)
+	if ev.Box != "" {
+		elemVal := b.resolve(ev.Box)
+		ptr := b.boxWhole(elemVal, ev.Tp.Tps[ev.Idx])
+		b.buildRecStore(alloca, ptr, 1)
+	}
+	return alloca
+}
+
+func (b *blockBuilder) buildDiscriminant(ident string, ev *ir.Discriminant) llvm.Value {
+	v := b.resolve(ev.Target)
+	if ev.Simple {
+		return v
+	}
+	return b.buildRecLoad(v, 0)
+}
+
+func (b *blockBuilder) buildUnbox(ident string, ev *ir.Unbox) llvm.Value {
+	v := b.resolve(ev.Target)
+	return b.unboxWhole(v, ev.Tp)
 }
 
 func (b *blockBuilder) buildPtr(v llvm.Value, tp types.ValType) llvm.Value {
@@ -478,19 +517,6 @@ func (b *blockBuilder) buildIf(ident string, it *ir.If) llvm.Value {
 		panic("else is nil")
 	}
 
-	if !ir.IsDangle(ident) {
-		if b.typeOf(ident) == nil {
-			return llvm.ConstNull(intT)
-		}
-		tp := buildType(b.typeOf(ident))
-		// 创建的phi所在的llvm block在上面buildBlock即已挂当前builder
-		bb := b.builder.GetInsertBlock()
-		b.builder.SetInsertPointBefore(bb.FirstInstruction())
-		PhiNode := b.builder.CreatePHI(tp, "ifmerge")
-		PhiNode.AddIncoming([]llvm.Value{thenv, elsev}, []llvm.BasicBlock{thenBlk, elseBlk})
-		b.builder.SetInsertPointAtEnd(bb)
-		return PhiNode
-	}
 	return llvm.ConstNull(intT)
 }
 
@@ -511,6 +537,8 @@ func buildType(tp types.ValType) llvm.Type {
 		return intT
 	case types.TpFloat:
 		return floatT
+	case types.TpVoidPtr:
+		return voidPtrT
 	case types.TpVar:
 		return voidPtrT
 	case types.TpArr:
@@ -652,6 +680,9 @@ func (b *blockBuilder) buildVal(ident string, v ir.Val) llvm.Value {
 			}
 		case ir.EQ:
 			argTp := b.typeOf(expr.Args[0])
+			if argTp.Code() == types.TpEnum && argTp.(*types.Enum).Simple {
+				return b.builder.CreateICmp(llvm.IntEQ, regs[0], regs[1], "==")
+			}
 			switch argTp {
 			case types.Int:
 				return b.builder.CreateICmp(llvm.IntEQ, regs[0], regs[1], "==")
@@ -710,6 +741,12 @@ func (b *blockBuilder) buildVal(ident string, v ir.Val) llvm.Value {
 		return b.buildRecLit(ident, expr)
 	case *ir.RecAcs:
 		return b.buildRecAcs(ident, expr)
+	case *ir.EnumVar:
+		return b.buildEnumVar(ident, expr)
+	case *ir.Discriminant:
+		return b.buildDiscriminant(ident, expr)
+	case *ir.Unbox:
+		return b.buildUnbox(ident, expr)
 	case *ir.Func:
 		// TODO: i.Ident应该是需要隐藏的，函数名应该放在ir.Fun里
 		// TODO 到底用ident还是expr.Body.Name

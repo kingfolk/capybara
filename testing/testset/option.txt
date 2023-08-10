@@ -1,0 +1,18 @@
+//@val int(121)
+type some = tup[T](T);
+type option = enum[P]{
+    none,
+    some[P]
+};
+fun f_option(): int = {
+    let b = option.some[int](121);
+    let r = 0;
+    match b {
+    case option.some[int](a):
+        r = a
+    case _:
+        r = 11
+    };
+    r
+}
+$$

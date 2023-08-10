@@ -12,3 +12,11 @@ fun f2(): int = {
     let b = person{age:10};
     b.age
 }
+$$
+
+//@val error(TYPE_RECORD_ACS_ILLEGAL)
+type person = rec{age:int};
+fun f2(): int = {
+    let b = person{age:10};
+    b.age(a)
+}

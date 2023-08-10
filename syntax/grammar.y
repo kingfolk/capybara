@@ -57,6 +57,8 @@ import (
 %token<token> LET
 %token<token> IN
 %token<token> REC
+%token<token> TUP
+%token<token> ENUM
 %token<token> COMMA
 %token<token> ARRAY
 %token<token> ARRAY_MAKE
@@ -71,10 +73,8 @@ import (
 %token<token> STRING_LITERAL
 %token<token> PERCENT
 %token<token> MATCH
-%token<token> WITH
+%token<token> CASE
 %token<token> BAR
-%token<token> SOME
-%token<token> NONE
 %token<token> MINUS_GREATER
 %token<token> FUN
 %token<token> COLON
@@ -90,7 +90,6 @@ import (
 %right prec_seq
 %right SEMICOLON
 %left prec_def
-%nonassoc WITH
 %right prec_if
 %right prec_match
 %right prec_fun
@@ -117,6 +116,8 @@ import (
 %type<node> int_exp
 %type<nodes> seq_exp
 %type<nodes> list_exp
+%type<node> case
+%type<nodes> seq_case
 %type<node> vardef
 %type<nodes> args
 %type<params> params
@@ -127,9 +128,12 @@ import (
 %type<namedargs> named_args
 %type<node> simple_type_annotation
 %type<node> type
+%type<nodes> seq_type
 %type<node> simple_type
 %type<node> array_type
 %type<node> rec_type
+%type<node> tup_type
+%type<node> enum_type
 %type<program> toplevels
 %type<> program
 
@@ -212,8 +216,6 @@ exp:
 				$$ = &ast.String{$1, s}
 			}
 		}
-	| NONE
-		{ $$ = &ast.None{$1} }
 	| IDENT
 		{ $$ = &ast.VarRef{$1, ast.NewSymbol($1.Value())} }
 	| NOT exp
@@ -256,7 +258,7 @@ exp:
 		{
 			$$ = &ast.Loop{$1, $3, $6}
 		}
-	| ARRAY LESS simple_type GREATER LPAREN args RPAREN
+	| ARRAY LBRACKET simple_type RBRACKET LPAREN args RPAREN
 		{ $$ = &ast.ArrayLit{$1, $7, $6} }
 	| vardef
 		{ $$ = $1 }
@@ -265,9 +267,18 @@ exp:
 	| exp LPAREN args RPAREN
 		%prec prec_app
 		{
-			if b, ok := $1.(*ast.ApplyBracket); ok {
-				$$ = &ast.Apply{b.Expr, b.Args, $3}
-			} else {
+			switch b := $1.(type) {
+			case *ast.ApplyBracket:
+				if d, ok := b.Expr.(*ast.DotAcs); ok {
+					app := &ast.Apply{d.Dot, b.Args, $3}
+					$$ = &ast.DotAcs{d.Expr, app, $4}
+				} else {
+					$$ = &ast.Apply{b.Expr, b.Args, $3}
+				}
+			case *ast.DotAcs:
+				app := &ast.Apply{b.Dot, nil, $3}
+				$$ = &ast.DotAcs{b.Expr, app, $4}
+			default:
 				$$ = &ast.Apply{$1, nil, $3}
 			}
 		}
@@ -301,7 +312,15 @@ exp:
 			}
 		}
 	| exp DOT IDENT
-		{ $$ = &ast.RecAcs{$1, sym($3), $3} }
+		{
+			ref := &ast.VarRef{$3, sym($3)}
+			$$ = &ast.DotAcs{$1, ref, $3} 
+		}
+	| exp DOT INT
+		{ 
+			ref := &ast.VarRef{$3, sym($3)}
+			$$ = &ast.DotAcs{$1, ref, $3}
+		}
 	| FUN IDENT opt_type_params func_params simple_type_annotation EQUAL LCURLY seq_exp RCURLY
 		%prec prec_fun
 		{
@@ -320,11 +339,35 @@ exp:
 				Body: ref,
 			}
 		}
+	| MATCH exp LCURLY seq_case RCURLY
+		%prec prec_if
+		{
+			var cases []*ast.Case
+			for _, c := range $4 {
+				cases = append(cases, c.(*ast.Case))
+			}
+			$$ = &ast.Match{
+				StartToken: $1,
+				EndToken: $5,
+				Target: $2,
+				Cases: cases,
+			}
+		}
 	| ILLEGAL error
 		{
 			yylex.Error("Parsing illegal token: " + $1.String())
 			$$ = nil
 		}
+
+seq_case:
+	case
+		{ $$ = []ast.Expr{$1} }
+	| seq_case case
+		{ $$ = append($1, $2) }
+
+case:
+	CASE exp COLON seq_exp
+		{ $$ = &ast.Case{$1, $2, $4} }
 
 vardef:
 	LET IDENT COLON type
@@ -388,6 +431,16 @@ type:
 		{ $$ = $1 }
 	| rec_type
 		{ $$ = $1 }
+	| tup_type
+		{ $$ = $1 }
+	| enum_type
+		{ $$ = $1 }
+
+seq_type:
+	type
+		{ $$ = []ast.Expr{$1} }
+	| seq_type COMMA type
+		{ $$ = append($1, $3) }
 
 simple_type:
 	IDENT
@@ -396,7 +449,7 @@ simple_type:
 		{ $$ = &ast.CtorType{nil, $1, $3, nil, ast.NewSymbol($1.Value())} }
 
 array_type:
-	ARRAY LESS simple_type COMMA int_exp GREATER
+	ARRAY LBRACKET simple_type COMMA int_exp RBRACKET
 		{
 			ele := $3
 			size := $5
@@ -411,6 +464,18 @@ rec_type:
 				e = append(e, p)
 			}
 			$$ = &ast.CtorType{$1, $5, e, $2, sym($1)}
+		}
+
+tup_type:
+	TUP opt_type_params LPAREN seq_type RPAREN
+		{
+			$$ = &ast.CtorType{$1, $5, $4, $2, sym($1)}
+		}
+
+enum_type:
+	ENUM opt_type_params LCURLY seq_type RCURLY
+		{
+			$$ = &ast.CtorType{$1, $5, $4, $2, sym($1)}
 		}
 
 opt_type_params:

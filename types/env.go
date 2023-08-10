@@ -41,6 +41,19 @@ type (
 		Substs []ValType
 	}
 
+	Enum struct {
+		Uid    uint64
+		Simple bool
+		Tokens []string
+		TpVars []*TypeVar
+		Tps    []ValType
+	}
+
+	Symbol struct {
+		Uid  uint64
+		Name string
+	}
+
 	TypeVar struct {
 		Name string
 	}
@@ -57,14 +70,18 @@ const (
 	TpBool
 	TpInt
 	TpFloat
-	TpFunc
+	TpVoidPtr
+	TpVar
 	TpArr
 	TpRec
-	TpVar
+	TpEnum
+	TpSym
+	TpFunc
 	TpApp
 )
 
 var (
+	VoidP = &primitiveType{tp: TpVoidPtr}
 	Unit  = &primitiveType{tp: TpUnit}
 	Int   = &primitiveType{tp: TpInt}
 	Float = &primitiveType{tp: TpFloat}
@@ -76,6 +93,9 @@ var (
 var _ ValType = (*primitiveType)(nil)
 var _ ValType = (*Func)(nil)
 var _ ValType = (*TypeVar)(nil)
+var _ ValType = (*Rec)(nil)
+var _ ValType = (*Enum)(nil)
+var _ ValType = (*Symbol)(nil)
 
 func IsPrimitive(t ValType) bool {
 	_, ok := t.(*primitiveType)
@@ -155,6 +175,49 @@ func (t *Rec) KeyIndex(key string) int {
 		}
 	}
 	return -1
+}
+
+func (t *Enum) Code() int {
+	return TpEnum
+}
+
+func (t *Enum) String() string {
+	var str string
+	if len(t.TpVars) > 0 {
+		str += "<"
+		for i, tpVar := range t.TpVars {
+			if i > 0 {
+				str += ", "
+			}
+			str += tpVar.String()
+		}
+		str += ">"
+	}
+	str += "("
+	for i, tp := range t.Tps {
+		if i > 0 {
+			str += ", "
+		}
+		str += tp.String()
+	}
+	return "enum" + str + ")"
+}
+
+func (t *Enum) KeyIndex(key string) (int, bool) {
+	for i, k := range t.Tokens {
+		if k == key {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+func (t *Symbol) Code() int {
+	return TpSym
+}
+
+func (t *Symbol) String() string {
+	return "sym(" + t.Name + ")"
 }
 
 func (t *Func) String() string {

@@ -92,16 +92,16 @@ func (l *Lexer) emitIdent(ident string) {
 		l.emit(token.IN)
 	case "rec":
 		l.emit(token.REC)
+	case "tup":
+		l.emit(token.TUP)
+	case "enum":
+		l.emit(token.ENUM)
 	case "not":
 		l.emit(token.NOT)
 	case "match":
 		l.emit(token.MATCH)
-	case "with":
-		l.emit(token.WITH)
-	case "Some":
-		l.emit(token.SOME)
-	case "None":
-		l.emit(token.NONE)
+	case "case":
+		l.emit(token.CASE)
 	case "fun":
 		l.emit(token.FUN)
 	case "type":

@@ -41,6 +41,8 @@ const (
 	LET
 	IN
 	REC
+	TUP
+	ENUM
 	COMMA
 	ARRAY
 	ARRAY_MAKE
@@ -55,10 +57,8 @@ const (
 	STRING_LITERAL
 	PERCENT
 	MATCH
-	WITH
+	CASE
 	BAR
-	SOME
-	NONE
 	MINUS_GREATER
 	FUN
 	COLON
@@ -104,6 +104,8 @@ var tokenTable = [...]string{
 	LET:            "let",
 	IN:             "in",
 	REC:            "rec",
+	TUP:            "tup",
+	ENUM:           "enum",
 	COMMA:          ",",
 	ARRAY:          "ARRAY",
 	ARRAY_MAKE:     "Array.make",
@@ -118,10 +120,8 @@ var tokenTable = [...]string{
 	STRING_LITERAL: "STRING_LITERAL",
 	PERCENT:        "%",
 	MATCH:          "match",
-	WITH:           "with",
+	CASE:           "case",
 	BAR:            "|",
-	SOME:           "Some",
-	NONE:           "None",
 	MINUS_GREATER:  "->",
 	FUN:            "fun",
 	COLON:          ":",

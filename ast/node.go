@@ -307,27 +307,23 @@ type (
 		Args   []NamedArg
 	}
 
-	RecAcs struct {
+	DotAcs struct {
 		Expr     Expr
-		Acs      *Symbol
+		Dot      Expr
 		EndToken *token.Token
 	}
 
 	Match struct {
-		StartToken     *token.Token
-		Target         Expr
-		IfSome, IfNone Expr
-		SomeIdent      *Symbol
-		EndPos         locerr.Pos
-	}
-
-	Some struct {
 		StartToken *token.Token
-		Child      Expr
+		EndToken   *token.Token
+		Target     Expr
+		Cases      []*Case
 	}
 
-	None struct {
-		Token *token.Token
+	Case struct {
+		StartToken *token.Token
+		Cond       Expr
+		Body       []Expr
 	}
 
 	ArrayLit struct {
@@ -655,11 +651,11 @@ func (e *RecLit) End() locerr.Pos {
 	return last.Arg.End()
 }
 
-func (e *RecAcs) Pos() locerr.Pos {
+func (e *DotAcs) Pos() locerr.Pos {
 	return e.Expr.Pos()
 }
 
-func (e *RecAcs) End() locerr.Pos {
+func (e *DotAcs) End() locerr.Pos {
 	return e.EndToken.End
 }
 
@@ -667,21 +663,14 @@ func (e *Match) Pos() locerr.Pos {
 	return e.StartToken.Start
 }
 func (e *Match) End() locerr.Pos {
-	return e.EndPos
+	return e.EndToken.End
 }
 
-func (e *Some) Pos() locerr.Pos {
+func (e *Case) Pos() locerr.Pos {
 	return e.StartToken.Start
 }
-func (e *Some) End() locerr.Pos {
-	return e.Child.End()
-}
-
-func (e *None) Pos() locerr.Pos {
-	return e.Token.Start
-}
-func (e *None) End() locerr.Pos {
-	return e.Token.End
+func (e *Case) End() locerr.Pos {
+	return e.Body[len(e.Body)-1].End()
 }
 
 func (e *ArrayLit) Pos() locerr.Pos {
@@ -795,10 +784,9 @@ func (e *ArraySize) Name() string    { return "ArraySize" }
 func (e *ApplyBracket) Name() string { return "ApplyBracket" }
 func (e *ArrayPut) Name() string     { return "ArrayPut" }
 func (e *RecLit) Name() string       { return "RecLit" }
-func (e *RecAcs) Name() string       { return "RecAcs" }
-func (e *Match) Name() string        { return fmt.Sprintf("Match (%s)", e.SomeIdent.DisplayName) }
-func (e *Some) Name() string         { return "Some" }
-func (e *None) Name() string         { return "None" }
+func (e *DotAcs) Name() string       { return "DotAcs" }
+func (e *Match) Name() string        { return fmt.Sprintf("Match (%s)", e.Target.Name()) }
+func (e *Case) Name() string         { return fmt.Sprintf("Case (%s)", e.Cond.Name()) }
 func (e *ArrayLit) Name() string     { return fmt.Sprintf("ArrayLit (%d)", len(e.Elems)) }
 func (e *FuncType) Name() string     { return "FuncType" }
 func (e *TupleType) Name() string    { return fmt.Sprintf("TupleType (%d)", len(e.ElemTypes)) }

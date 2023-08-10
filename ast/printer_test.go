@@ -2,11 +2,11 @@ package ast
 
 import (
 	"bytes"
+	"go/token"
 	"io"
 	"os"
 	"testing"
 
-	"github.com/kingfolk/capybara/token"
 	"github.com/rhysd/locerr"
 )
 

@@ -100,6 +100,14 @@ func EmitIR(mod *ast.AST, debugMode bool, globals ...GlobalDef) (root *ir.Module
 	root.Env.Defs = declTable
 	em = e
 
+	if e.debug {
+		for _, f := range root.Funcs {
+			fmt.Println("--- lifted bb " + f.String() + "---")
+			fmt.Println(ir.CFGFuncString(f))
+			fmt.Println("--- lifted bb end ---")
+		}
+	}
+
 	return
 }
 
@@ -191,14 +199,16 @@ func (e *Emitter) emitInsn(node ast.Expr) *ir.Instr {
 		return e.emitArrPutInsn(n)
 	case *ast.RecLit:
 		return e.emitRecLitInsn(n)
-	case *ast.RecAcs:
-		return e.emitRecAcsInsn(n)
+	case *ast.DotAcs:
+		return e.emitDotAcsInsn(n)
 	case *ast.Apply:
 		return e.emitAppInsn(n)
 	case *ast.If:
 		return e.emitIfInsn(n)
 	case *ast.Loop:
 		return e.emitLoopInsn(n)
+	case *ast.Match:
+		return e.emitMatchInsn(n)
 	case *ast.Let:
 		return e.emitLetInsn(n)
 	case *ast.Mutate:
@@ -246,13 +256,20 @@ func TypeCheckNumeric(t types.ValType) {
 	}
 }
 
+func (e *Emitter) registerDecl(name, bound string) {
+	_, ok := e.scope.vars[name]
+	if ok {
+		panic("TypeError: re-declaration of " + name)
+	}
+	e.scope.vars[name] = bound
+}
+
 func (e *Emitter) emitLetInsn(node *ast.Let) *ir.Instr {
 	bound := e.emitInsn(node.Bound)
-	_, ok := e.scope.vars[node.Symbol.Name]
-	if ok {
-		panic("TypeError: re-declaration of " + node.Symbol.Name)
+	e.registerDecl(node.Symbol.Name, bound.Ident)
+	if i, ok := bound.Val.(*ir.If); ok {
+		e.mutateIdentEndOfBlock(bound.Ident, i.Then, i.Else)
 	}
-	e.scope.vars[node.Symbol.Name] = bound.Ident
 
 	if node.Type != nil {
 		tp := e.emitType(node.Type)
@@ -270,6 +287,14 @@ func (e *Emitter) emitMutateInsn(node *ast.Mutate) *ir.Instr {
 	ident, ok := e.scope.vars[node.Ref.Symbol.Name]
 	if !ok {
 		panic("TypeError: undeclared of " + node.Ref.Symbol.Name)
+	}
+	tp := e.env.GetDefTrusted(ident)
+	rightTp := e.env.GetDefTrusted(right.Ident)
+	if err := types.TypeCompatible(tp, rightTp); err != nil {
+		panic(err)
+	}
+	if i, ok := right.Val.(*ir.If); ok {
+		e.mutateIdentEndOfBlock(right.Ident, i.Then, i.Else)
 	}
 	it := &ir.Instr{
 		Ident: ident,
@@ -323,6 +348,119 @@ func (e *Emitter) emitLoopInsn(n *ast.Loop) *ir.Instr {
 
 	e.scope.blk = afterBlk
 	return e.emitInsn(&ast.Unit{})
+}
+
+func (e *Emitter) emitMatchInsn(n *ast.Match) *ir.Instr {
+	target := e.emitInsn(n.Target)
+	targetTp := target.Type().(*types.Enum)
+
+	var unwrap *ir.Instr
+	if !targetTp.Simple {
+		targetUnwrap := &ir.RecAcs{
+			Tp:     targetTp,
+			Target: target.Ident,
+			Idx:    1,
+		}
+		unwrap = e.rvalInstr(targetUnwrap)
+	}
+
+	targetIr := e.formDiscriminant(target, targetTp)
+
+	var emitThenBlock = func(tp types.ValType, cv *ast.DotAcs, body []ast.Expr) {
+		varTp, ok := tp.(*types.Rec)
+		if ok {
+			dot := cv.Dot.(*ast.Apply)
+			if len(varTp.Keys) != len(dot.Args) {
+				panic(errors.NewError(errors.TYPE_RECORD_NOT_FULFILLED, "enum match literal not fulfilled."))
+			}
+			unbox := &ir.Unbox{
+				Tp:     tp,
+				Target: unwrap.Ident,
+			}
+			unboxIr := e.rvalInstr(unbox)
+			for i, arg := range dot.Args {
+				v, ok := arg.(*ast.VarRef)
+				if !ok {
+					panic(errors.NewError(errors.TYPE_ENUM_DESTRUCT_ILLEGAL, "enum match destruct illegal"))
+				}
+				innerAcs := &ir.RecAcs{
+					Tp:     varTp.MemTps[i],
+					Target: unboxIr.Ident,
+					Idx:    i,
+				}
+				destruct := e.rvalInstr(innerAcs)
+				e.registerDecl(v.Symbol.Name, destruct.Ident)
+			}
+		}
+		for _, node := range body {
+			e.emitInsn(node)
+		}
+	}
+
+	var firstIf *ir.Instr
+	var prevIf *ir.If
+	var condBlk *ir.Block = e.scope.blk
+	var hasOther bool
+	var allBlk []*ir.Block
+	for i, c := range n.Cases {
+		switch cv := c.Cond.(type) {
+		case *ast.DotAcs:
+			enumTp, idx, ok := e.resolveEnum(cv)
+			if !ok {
+				panic(errors.NewError(errors.TYPE_ENUM_UNDEFINED, "enum match undefined"))
+			}
+
+			caseBlk := ir.NewBlock(&e.scope.blockId, "case-then-"+strconv.Itoa(i))
+			allBlk = append(allBlk, caseBlk)
+
+			e.scope.blk = caseBlk
+			emitThenBlock(enumTp.Tps[idx], cv, c.Body)
+
+			ifBlk := ir.NewBlock(&e.scope.blockId, "case-if-"+strconv.Itoa(i))
+			linkBB(condBlk, ifBlk)
+			linkBB(ifBlk, caseBlk)
+			condBlk = ifBlk
+			if prevIf != nil {
+				prevIf.Else = ifBlk
+			}
+			e.scope.blk = ifBlk
+			discr := ir.NewConst(types.Int, []byte(strconv.FormatInt(int64(idx), 10)))
+			discrIr := e.rvalInstr(discr)
+			cond := e.rvalInstr(ir.NewBinary(ir.EQ, targetIr.Ident, discrIr.Ident, types.Bool))
+			prevIf = &ir.If{
+				Cond: cond.Ident,
+				Then: caseBlk,
+			}
+			ifi := e.instr(prevIf, e.genID(), ir.IfKind)
+			if firstIf == nil {
+				firstIf = ifi
+			}
+		case *ast.VarRef:
+			if cv.Symbol.Name == "_" {
+				hasOther = true
+				otherBlk := e.emitBlock("case-other", c.Body...)
+				allBlk = append(allBlk, otherBlk)
+				linkBB(e.scope.blk, otherBlk)
+				if prevIf != nil {
+					prevIf.Else = otherBlk
+				} else {
+					panic(errors.NewError(errors.TYPE_ENUM_OTHER_ILLEGAL, "match other should not place at first"))
+				}
+			} else {
+				panic(errors.NewError(errors.TYPE_ENUM_UNDEFINED, "enum match undefined"))
+			}
+		}
+	}
+
+	if !hasOther {
+		panic(errors.NewError(errors.TYPE_ENUM_OTHER_ILLEGAL, "missing case _"))
+	}
+
+	e.scope.blk = ir.NewBlock(&e.scope.blockId, "match "+target.Ident+" after")
+	for _, b := range allBlk {
+		linkBB(b, e.scope.blk)
+	}
+	return firstIf
 }
 
 func (e *Emitter) emitFunInsn(node *ast.LetRec) *ir.Instr {
@@ -484,19 +622,105 @@ func (e *Emitter) emitRecLitInsn(node *ast.RecLit) *ir.Instr {
 	return e.rvalInstr(val)
 }
 
-func (e *Emitter) emitRecAcsInsn(node *ast.RecAcs) *ir.Instr {
-	rec := e.emitInsn(node.Expr)
-	t := e.env.GetDefTrusted(rec.Ident)
-	tRec, ok := t.(*types.Rec)
-	if !ok {
-		panic("rec access apply on non-rec type: " + t.String())
+var EnumBox *types.Rec
+
+func init() {
+	types.TpUidCounter++
+	EnumBox = &types.Rec{
+		Uid:    types.TpUidCounter,
+		Keys:   []string{"0", "1"},
+		MemTps: []types.ValType{types.Int, types.VoidP},
 	}
-	idx := tRec.KeyIndex(node.Acs.Name)
-	val := &ir.RecAcs{
-		Tp:  tRec.MemTps[idx],
-		Rec: rec.Ident,
-		Idx: idx,
+}
+
+func (e *Emitter) resolveEnum(node *ast.DotAcs) (*types.Enum, int, bool) {
+	if v, ok := node.Expr.(*ast.VarRef); ok {
+		if t, ok := e.env.Types[v.Symbol.Name]; ok && t.Code() == types.TpEnum {
+			enumTp := t.(*types.Enum)
+			var idx int
+			switch d := node.Dot.(type) {
+			case *ast.VarRef:
+				idx, ok = enumTp.KeyIndex(d.Symbol.Name)
+				if !ok {
+					panic(errors.NewError(errors.TYPE_ENUM_ELE_UNDEFINED, "enum match undefined "+d.Symbol.Name))
+				}
+			case *ast.Apply:
+				vr, ok := d.Callee.(*ast.VarRef)
+				if !ok {
+					panic("unreachable. Apply after dot can only be VarRef")
+				}
+				idx, ok = enumTp.KeyIndex(vr.Symbol.Name)
+				if !ok {
+					panic(errors.NewError(errors.TYPE_ENUM_ELE_UNDEFINED, "enum match undefined "+vr.Symbol.Name))
+				}
+				var tpArgs []types.ValType
+				for _, ta := range d.TpArgs {
+					tpArgs = append(tpArgs, e.emitType(ta))
+				}
+				tp, err := types.SubstRoot(enumTp, tpArgs)
+				if err != nil {
+					panic(err)
+				}
+				enumTp = tp.(*types.Enum)
+			default:
+				panic("unreachable. DotAcs ast illegal")
+			}
+			return enumTp, idx, true
+		}
 	}
+	return nil, 0, false
+}
+
+func (e *Emitter) emitDotAcsInsn(node *ast.DotAcs) *ir.Instr {
+	if enumTp, idx, ok := e.resolveEnum(node); ok {
+		var op string
+		if !enumTp.Simple {
+			variant := enumTp.Tps[idx]
+			switch variant.(type) {
+			case *types.Rec:
+				i := e.emitInsn(node.Dot)
+				op = i.Ident
+			}
+		}
+		val := &ir.EnumVar{
+			Tp:  enumTp,
+			Tok: node.Dot.Name(),
+			Idx: idx,
+			Box: op,
+		}
+		return e.rvalInstr(val)
+	}
+
+	target := e.emitInsn(node.Expr)
+	t := e.env.GetDefTrusted(target.Ident)
+	var val ir.Val
+	switch tp := t.(type) {
+	case *types.Rec:
+		vr, ok := node.Dot.(*ast.VarRef)
+		if !ok {
+			panic(errors.NewError(errors.TYPE_RECORD_ACS_ILLEGAL, "record access syntax error"))
+		}
+		idx := tp.KeyIndex(vr.Symbol.Name)
+		val = &ir.RecAcs{
+			Tp:     tp.MemTps[idx],
+			Target: target.Ident,
+			Idx:    idx,
+		}
+	case *types.Enum:
+		vr, ok := node.Dot.(*ast.VarRef)
+		if !ok {
+			panic(errors.NewError(errors.TYPE_ENUM_ELE_UNDEFINED, "enum element illegal"))
+		}
+		switch vr.Symbol.Name {
+		case "discriminant":
+			return e.formDiscriminant(target, tp)
+		default:
+			panic(errors.NewError(errors.TYPE_ENUM_ELE_UNDEFINED, "enum element undefined: "+vr.Symbol.Name))
+		}
+	default:
+		panic("unsupported dot operation for type: " + t.String())
+	}
+
 	return e.rvalInstr(val)
 }
 
@@ -505,6 +729,27 @@ func (e *Emitter) emitAppInsn(node *ast.Apply) *ir.Instr {
 	if !ok {
 		panic("unsupported apply instr")
 	}
+	tp, ok := e.env.Types[ref.Symbol.Name]
+	if ok {
+		args := []ast.NamedArg{}
+		tr := tp.(*types.Rec)
+		if len(node.Args) != len(tr.Keys) {
+			panic(errors.NewError(errors.TYPE_RECORD_NOT_FULFILLED, "literal not fulfilled"))
+		}
+		for i, arg := range node.Args {
+			args = append(args, ast.NamedArg{
+				Ident: ast.NewSymbol(tr.Keys[i]),
+				Arg:   arg,
+			})
+		}
+		recLit := &ast.RecLit{
+			Ref:    ref,
+			TpArgs: node.TpArgs,
+			Args:   args,
+		}
+		return e.emitRecLitInsn(recLit)
+	}
+
 	t := e.env.GetDefTrusted(ref.Symbol.Name)
 	tFun, ok := t.(*types.Func)
 	if !ok {
@@ -567,6 +812,35 @@ func (e *Emitter) genID() string {
 	return ir.GenVarIdent(e.count)
 }
 
+func (e *Emitter) formDiscriminant(target *ir.Instr, tp *types.Enum) *ir.Instr {
+	if tp.Simple {
+		return target
+	}
+	val := &ir.RecAcs{
+		Tp:     types.Int,
+		Target: target.Ident,
+		Idx:    0,
+	}
+	return e.rvalInstr(val)
+}
+
+func (e *Emitter) mutateIdentEndOfBlock(ident string, bs ...*ir.Block) {
+	for _, b := range bs {
+		last := b.Last()
+		if i, ok := last.Val.(*ir.If); ok {
+			e.mutateIdentEndOfBlock(ident, i.Then)
+			e.mutateIdentEndOfBlock(ident, i.Else)
+		} else {
+			it := &ir.Instr{
+				Ident: ident,
+				Kind:  ir.RValKind,
+				Val:   ir.NewRef(last.Type(), last.Ident),
+			}
+			b.Ins = append(b.Ins, it)
+		}
+	}
+}
+
 func (e *Emitter) emitType(node ast.Expr) types.ValType {
 	primitiveMap := map[string]types.ValType{
 		"unit":  types.Unit,
@@ -611,6 +885,63 @@ func (e *Emitter) emitType(node ast.Expr) types.ValType {
 				Keys:   keys,
 				MemTps: memTps,
 				TpVars: typeVars,
+			}
+		case "tup":
+			var typeVars []*types.TypeVar
+			var keys []string
+			var memTps []types.ValType
+			for _, a := range n.TpParams {
+				typeVars = append(typeVars, &types.TypeVar{Name: a.Name})
+			}
+			for i, p := range n.ParamTypes {
+				keys = append(keys, strconv.Itoa(i))
+				memTps = append(memTps, e.emitType(p))
+			}
+			types.TpUidCounter++
+			return &types.Rec{
+				Uid:    types.TpUidCounter,
+				Keys:   keys,
+				MemTps: memTps,
+				TpVars: typeVars,
+			}
+		case "enum":
+			var typeVars []*types.TypeVar
+			var tps []types.ValType
+			tvMap := map[string]bool{}
+			for _, a := range n.TpParams {
+				typeVars = append(typeVars, &types.TypeVar{Name: a.Name})
+				tvMap[a.Name] = true
+			}
+			simple := true
+			var tokens []string
+			for _, p := range n.ParamTypes {
+				ctor, ok := p.(*ast.CtorType)
+				if !ok {
+					panic("unreachable. enum element must have Ctor type")
+				}
+				if ctor.Ctor.Name == "rec" || ctor.Ctor.Name == "array" || ctor.Ctor.Name == "tup" {
+					panic(errors.NewErrorWithTk(errors.TYPE_ENUM_ELE_ILLEGAL, ctor.Ctor.Name+" not allowed", ctor.StartToken))
+				}
+				tokens = append(tokens, ctor.Ctor.Name)
+				tp := e.emitType(p)
+				if tv, ok := tp.(*types.TypeVar); ok && !tvMap[tv.Name] {
+					types.TpUidCounter++
+					tp = &types.Symbol{
+						Uid:  types.TpUidCounter,
+						Name: tv.Name,
+					}
+				} else {
+					simple = false
+				}
+				tps = append(tps, tp)
+			}
+			types.TpUidCounter++
+			return &types.Enum{
+				Uid:    types.TpUidCounter,
+				Simple: simple,
+				Tokens: tokens,
+				TpVars: typeVars,
+				Tps:    tps,
 			}
 		default:
 			if t, ok := e.env.Types[n.Ctor.Name]; ok {
