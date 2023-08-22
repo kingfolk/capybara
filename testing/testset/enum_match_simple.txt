@@ -1,0 +1,44 @@
+//@val int(12)
+type sport = enum{
+    running,
+    swimming,
+    cycling
+};
+fun f_enum(): int = {
+    let b = sport.swimming;
+    let r = 0;
+    match b {
+    case sport.running:
+        r = 11
+    case sport.swimming:
+        r = 12
+    case sport.cycling:
+        r = 13
+    case _:
+        r = 100
+    };
+    r
+}
+$$
+
+//@val int(12)
+type sport = enum{
+    running,
+    swimming,
+    cycling
+};
+fun f_enum(): int = {
+    let b = sport.swimming;
+    let r = match b {
+    case sport.running:
+        11
+    case sport.swimming:
+        12
+    case sport.cycling:
+        13
+    case _:
+        100
+    };
+    r
+}
+$$

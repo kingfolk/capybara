@@ -44,6 +44,11 @@ func TypeCheckMutate(left, right ValType) error {
 
 // TypeCompatible mainly test if t1 can as a container to receive t2
 func TypeCompatible(t1, t2 ValType) error {
+	// int and simple enum are compatible
+	if (t1.Code() == TpInt && t2.Code() == TpEnum && t2.(*Enum).Simple) || (t2.Code() == TpInt && t1.Code() == TpEnum && t1.(*Enum).Simple) {
+		return nil
+	}
+
 	switch t1.Code() {
 	case TpVar:
 		// if t1 is TpVar, a universal container for any other type
@@ -67,6 +72,13 @@ func TypeCompatible(t1, t2 ValType) error {
 			}
 		}
 		return nil
+	case TpEnum:
+		if t1.Code() != t2.Code() {
+			return errors.NewError(errors.TYPE_INCOMPATIBLE_ENUM, "enum "+t1.String()+" and "+t2.String()+" not compatible")
+		}
+		if t1.(*Enum).Uid != t2.(*Enum).Uid {
+			return errors.NewError(errors.TYPE_INCOMPATIBLE_ENUM, "enum "+t1.String()+" and "+t2.String()+" not compatible")
+		}
 	case TpArr:
 		// TODO not handle array type check for the moment
 		return nil
@@ -116,6 +128,8 @@ func SubstRoot(t ValType, tpArgs []ValType) (ValType, error) {
 		tpVars = tp.TpVars
 	case *Rec:
 		tpVars = tp.TpVars
+	case *Enum:
+		tpVars = tp.TpVars
 	}
 	if len(tpArgs) != len(tpVars) {
 		return nil, errors.NewError(errors.TYPE_SUBSTITUTE_NUM_MISMATCH, "invoke type arguments more or less than defined type parameters")
@@ -158,6 +172,14 @@ func Subst(t ValType, set map[string]ValType, tpArgs []ValType) ValType {
 			Substs: tpArgs,
 		}
 		return tr
+	case *Enum:
+		return &Enum{
+			Uid:    tp.Uid,
+			Simple: tp.Simple,
+			Tokens: tp.Tokens,
+			TpVars: tp.TpVars,
+			Tps:    SubstList(tp.Tps, set, tpArgs),
+		}
 	}
 	return t
 }

@@ -1,0 +1,20 @@
+//@val int(123)
+type one = tup(int);
+type two = tup(int,int);
+type sport = enum{
+    none,
+    one,
+    two
+};
+fun f_enum(): int = {
+    let b = sport.one(123);
+    let r = 0;
+    match b {
+    case sport.one(a):
+        r = a
+    case _:
+        r = 11
+    };
+    r
+}
+$$

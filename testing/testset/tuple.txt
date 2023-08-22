@@ -1,0 +1,15 @@
+//@val int(121)
+type ss = tup(int);
+fun f_tuple(): int = {
+    let b = ss(121);
+    b.0
+}
+$$
+
+//@val int(122)
+type some = tup[T](T);
+fun f_tuple(): int = {
+    let b = some[int](122);
+    b.0
+}
+$$

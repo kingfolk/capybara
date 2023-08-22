@@ -1,0 +1,35 @@
+//@val int(0)
+type sport = enum{
+    running,
+    swimming,
+    cycling
+};
+fun f_enum(): int = {
+    let b = sport.running;
+    b.discriminant
+}
+$$
+
+//@val int(1)
+type sport = enum{
+    running,
+    swimming,
+    cycling
+};
+fun f_enum(): int = {
+    let b = sport.swimming;
+    b.discriminant
+}
+$$
+
+//@val int(2)
+type sport = enum{
+    running,
+    swimming,
+    cycling
+};
+fun f_enum(): int = {
+    let b = sport.cycling;
+    b.discriminant
+}
+$$

@@ -134,9 +134,26 @@ type (
 	}
 
 	RecAcs struct {
-		Tp  types.ValType
-		Rec string
+		Tp     types.ValType
+		Target string
+		Idx    int
+	}
+
+	EnumVar struct {
+		Tp  *types.Enum
+		Tok string
 		Idx int
+		Box string
+	}
+
+	Discriminant struct {
+		Simple bool
+		Target string
+	}
+
+	Unbox struct {
+		Tp     types.ValType
+		Target string
 	}
 )
 
@@ -206,6 +223,10 @@ func (e *Block) String() string {
 	}
 	ins = append(ins, "}")
 	return strings.Join(ins, "\n")
+}
+
+func (e *Block) Last() *Instr {
+	return e.Ins[len(e.Ins)-1]
 }
 
 func (e *Instr) Type() types.ValType {
@@ -331,7 +352,14 @@ func (e *RecLit) Type() types.ValType {
 }
 
 func (e *RecLit) String() string {
-	return "RecLit(" + strings.Join(e.Args, ", ") + ") "
+	var tp string
+	for i, t := range e.Tp.MemTps {
+		if i > 0 {
+			tp += ", "
+		}
+		tp = t.String()
+	}
+	return "Rec<" + tp + ">(" + strings.Join(e.Args, ", ") + ") "
 }
 
 func (e *RecAcs) Kind() int {
@@ -343,7 +371,43 @@ func (e *RecAcs) Type() types.ValType {
 }
 
 func (e *RecAcs) String() string {
-	return e.Rec + "." + strconv.Itoa(e.Idx)
+	return e.Target + "." + strconv.Itoa(e.Idx)
+}
+
+func (e *EnumVar) Kind() int {
+	return RValKind
+}
+
+func (e *EnumVar) Type() types.ValType {
+	return e.Tp
+}
+
+func (e *EnumVar) String() string {
+	return e.Tp.String() + "." + strconv.Itoa(e.Idx)
+}
+
+func (e *Discriminant) Kind() int {
+	return CallKind
+}
+
+func (e *Discriminant) Type() types.ValType {
+	return types.Int
+}
+
+func (e *Discriminant) String() string {
+	return "Discriminant(" + e.Target + ")"
+}
+
+func (e *Unbox) Kind() int {
+	return CallKind
+}
+
+func (e *Unbox) Type() types.ValType {
+	return e.Tp
+}
+
+func (e *Unbox) String() string {
+	return "Unbox(" + e.Target + ")"
 }
 
 func (e *Func) Kind() int {

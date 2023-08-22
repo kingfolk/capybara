@@ -1,0 +1,156 @@
+//@val error(TYPE_ENUM_ELE_ILLEGAL)
+type sport = enum{
+    running,
+    rec{swimming:int}
+};
+fun f_enum(): int = {
+    1
+}
+$$
+
+//@val error(TYPE_RECORD_NOT_FULFILLED)
+type one = tup(int);
+type two = tup(int,int);
+type sport = enum{
+    none,
+    one,
+    two
+};
+fun f_enum(): int = {
+    let b = sport.two(123);
+    b.discriminant
+}
+$$
+
+//@val error(TYPE_RECORD_NOT_FULFILLED)
+type one = tup(int);
+type two = tup(int,int);
+type sport = enum{
+    none,
+    one,
+    two
+};
+fun f_enum(): int = {
+    let b = sport.one(123);
+    let r = 0;
+    match b {
+    case sport.two(a):
+        r = a
+    case _:
+        r = 11
+    };
+    r
+}
+$$
+
+//@val error(TYPE_ENUM_DESTRUCT_ILLEGAL)
+type one = tup(int);
+type two = tup(int,int);
+type sport = enum{
+    none,
+    one,
+    two
+};
+fun f_enum(): int = {
+    let b = sport.one(123);
+    let r = 0;
+    match b {
+    case sport.one(1):
+        r = a
+    case _:
+        r = 11
+    };
+    r
+}
+$$
+
+//@val error(TYPE_ENUM_UNDEFINED)
+type one = tup(int);
+type sport = enum{
+    none,
+    one
+};
+fun f_enum(): int = {
+    let b = sport.one(123);
+    let r = 0;
+    match b {
+    case ccc:
+        r = a
+    case _:
+        r = 11
+    };
+    r
+}
+$$
+
+//@val error(TYPE_ENUM_ELE_UNDEFINED)
+type one = tup(int);
+type sport = enum{
+    none,
+    one
+};
+fun f_enum(): int = {
+    let b = sport.one(123);
+    let r = 0;
+    match b {
+    case sport.bb:
+        r = a
+    case _:
+        r = 11
+    };
+    r
+}
+$$
+
+//@val error(TYPE_ENUM_OTHER_ILLEGAL)
+type one = tup(int);
+type sport = enum{
+    none,
+    one
+};
+fun f_enum(): int = {
+    let b = sport.one(123);
+    let r = 0;
+    match b {
+    case _:
+        r = 11
+    };
+    r
+}
+$$
+
+//@val error(TYPE_ENUM_OTHER_ILLEGAL)
+type one = tup(int);
+type sport = enum{
+    none,
+    one
+};
+fun f_enum(): int = {
+    let b = sport.one(123);
+    let r = 0;
+    match b {
+    case sport.one(a):
+        r = a
+    };
+    r
+}
+$$
+
+//@val error(TYPE_INCOMPATIBLE_ENUM)
+type one = tup(int);
+type sport = enum{
+    none,
+    one
+};
+type sport1 = enum{
+    none,
+    one
+};
+fun f_enum(): int = {
+    let b = sport.one(123);
+    let b1 = sport1.one(123);
+    b = b1;
+    123
+}
+$$
+

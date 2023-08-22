@@ -137,10 +137,9 @@ func Visit(vis Visitor, e Expr) {
 		Visit(v, n.Assignee)
 	case *Match:
 		Visit(v, n.Target)
-		Visit(v, n.IfSome)
-		Visit(v, n.IfNone)
-	case *Some:
-		Visit(v, n.Child)
+		for _, c := range n.Cases {
+			Visit(v, c)
+		}
 	case *ArrayLit:
 		for _, e := range n.Elems {
 			Visit(v, e)

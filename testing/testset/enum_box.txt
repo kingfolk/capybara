@@ -1,0 +1,13 @@
+//@val int(1)
+type one = tup(int);
+type two = tup(int,int);
+type sport = enum{
+    none,
+    one,
+    two
+};
+fun f_enum(): int = {
+    let b = sport.one(123);
+    b.discriminant
+}
+$$

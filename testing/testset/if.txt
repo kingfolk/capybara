@@ -39,3 +39,11 @@ f($v1){
 //@val int(423), [int(1000)]
 fun f(a:int): int = { let x = 100; if a < 123 then x = 200 else x = 300; x+123 }
 $$
+
+//@val int(20), [int(1)]
+fun f1(a:int): int = { let x = if a < 123 then 20 else 21; x }
+$$
+
+//@val int(20), [int(1)]
+fun f1(a:int): int = { let x = 1; x = if a < 123 then 20 else 21; x }
+$$
