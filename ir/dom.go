@@ -14,6 +14,7 @@ type DominatorMaker struct {
 	rootBlock  *Block
 	allBlocks  []*Block
 	params     []string
+	LiftParams []string
 }
 
 func NewDominatorMaker(root *Block, debug bool, params ...string) *DominatorMaker {
@@ -373,9 +374,10 @@ func DangleIdent() string {
 	return dangleIdent
 }
 
-func (r *renamingStack) push(symbol string) {
+func (r *renamingStack) push(symbol string) string {
 	r.next()
 	r.stack[symbol] = r.index
+	return GenVarIdent(r.index)
 }
 
 func (m *DominatorMaker) renameBlock(block *Block, renaming *renamingStack) {
@@ -394,6 +396,8 @@ func (m *DominatorMaker) renameBlock(block *Block, renaming *renamingStack) {
 				}
 			case *Ref:
 				i.Ident = renaming.stackSymbol(i.Ident)
+			case *Ret:
+				i.Target = renaming.stackSymbol(i.Target)
 			case *ArrGet:
 				i.Arr = renaming.stackSymbol(i.Arr)
 				i.Index = renaming.stackSymbol(i.Index)
@@ -401,7 +405,11 @@ func (m *DominatorMaker) renameBlock(block *Block, renaming *renamingStack) {
 				i.Arr = renaming.stackSymbol(i.Arr)
 				i.Index = renaming.stackSymbol(i.Index)
 				i.Right = renaming.stackSymbol(i.Right)
-			case *Call:
+			case *StaticCall:
+				for idx, arg := range i.Args {
+					i.Args[idx] = renaming.stackSymbol(arg)
+				}
+			case *TraitCall:
 				for idx, arg := range i.Args {
 					i.Args[idx] = renaming.stackSymbol(arg)
 				}
@@ -416,6 +424,10 @@ func (m *DominatorMaker) renameBlock(block *Block, renaming *renamingStack) {
 					i.Box = renaming.stackSymbol(i.Box)
 				}
 			case *Discriminant:
+				i.Target = renaming.stackSymbol(i.Target)
+			case *Box:
+				i.Target = renaming.stackSymbol(i.Target)
+			case *BoxTrait:
 				i.Target = renaming.stackSymbol(i.Target)
 			case *Unbox:
 				i.Target = renaming.stackSymbol(i.Target)
@@ -468,7 +480,9 @@ func (m *DominatorMaker) rename(declTable map[string]types.ValType) map[string]t
 	}
 
 	for _, paramIdent := range m.params {
-		renaming.push(paramIdent)
+		symbol := renaming.push(paramIdent)
+		renaming.declTable[symbol] = declTable[paramIdent]
+		m.LiftParams = append(m.LiftParams, symbol)
 	}
 
 	m.renameBlock(m.rootBlock, renaming)
@@ -545,12 +559,12 @@ func (m *DominatorMaker) Lift(declTable map[string]types.ValType) map[string]typ
 
 	m.placePhi(df)
 
-	if m.debug {
-		fmt.Println("--- after place phi ---")
-		rb := CFGString(m.rootBlock)
-		fmt.Println(rb)
-		fmt.Println("--- after place phi end ---")
-	}
+	// if m.debug {
+	// 	fmt.Println("--- after place phi ---")
+	// 	rb := CFGString(m.rootBlock)
+	// 	fmt.Println(rb)
+	// 	fmt.Println("--- after place phi end ---")
+	// }
 
 	newDecls := m.rename(declTable)
 

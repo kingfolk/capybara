@@ -35,8 +35,6 @@ type buildContext struct {
 	curBlk     *ir.Block
 	blkMap     map[int]llvm.BasicBlock
 	phiPending []phiContext
-	retVal     llvm.Value
-	retBlk     llvm.BasicBlock
 }
 
 type blockBuilder struct {
@@ -62,8 +60,41 @@ var rootFuncPassMgr = llvm.NewFunctionPassManagerForModule(rootModule)
 var globalTable = map[string]llvm.Value{}
 var targetData llvm.TargetData
 
+var (
+	boolT    llvm.Type
+	intT     llvm.Type
+	floatT   llvm.Type
+	voidPtrT llvm.Type
+)
+
+type OptLevel int
+
+const (
+	// OptimizeNone is equivalent to -O0
+	OptimizeNone OptLevel = iota
+	// OptimizeLess is equivalent to -O1
+	OptimizeLess
+	// OptimizeDefault is equivalent to -O2
+	OptimizeDefault
+	// OptimizeAggressive is equivalent to -O3
+	OptimizeAggressive
+)
+
+func init() {
+	Reset()
+}
+
 func GetRootModule() llvm.Module {
 	return rootModule
+}
+
+func Reset() {
+	rootModule = llvm.NewModule("root")
+	context = llvm.GlobalContext()
+	boolT = context.Int1Type()
+	intT = context.Int32Type()
+	floatT = context.FloatType()
+	voidPtrT = llvm.PointerType(llvm.Int8Type(), 0)
 }
 
 func BuildFunc(fn *ir.Func, debug bool, globals ...*ExtGlobal) llvm.Value {
@@ -133,30 +164,11 @@ func newBlockBuilder(env *types.Env, debug bool) *blockBuilder {
 		env:       env,
 		builder:   context.NewBuilder(),
 		registers: map[string]llvm.Value{},
-		buildCtx:  &buildContext{blkMap: make(map[int]llvm.BasicBlock)},
+		buildCtx: &buildContext{
+			blkMap: make(map[int]llvm.BasicBlock),
+		},
 	}
 }
-
-var (
-	boolT llvm.Type = context.Int1Type()
-	intT  llvm.Type = context.Int32Type()
-	// TODO FLOAT?
-	floatT   llvm.Type = context.DoubleType()
-	voidPtrT llvm.Type = llvm.PointerType(llvm.Int8Type(), 0)
-)
-
-type OptLevel int
-
-const (
-	// OptimizeNone is equivalent to -O0
-	OptimizeNone OptLevel = iota
-	// OptimizeLess is equivalent to -O1
-	OptimizeLess
-	// OptimizeDefault is equivalent to -O2
-	OptimizeDefault
-	// OptimizeAggressive is equivalent to -O3
-	OptimizeAggressive
-)
 
 // RunOptimizationPasses passes optimizations on generated LLVM IR module following specified optimization level.
 func RunOptimizationPasses(opt OptLevel) {
@@ -226,7 +238,7 @@ func (b *blockBuilder) finalizePhi() {
 
 func (b *blockBuilder) buildFunc(name string, f *ir.Func) llvm.Value {
 	tpDef := f.Type()
-	funcType := buildFuncType(tpDef.(*types.Func))
+	funcType := b.buildFuncType(tpDef.(*types.Func), true)
 	theFunction := llvm.AddFunction(rootModule, name, funcType)
 
 	if theFunction.IsNil() {
@@ -244,16 +256,6 @@ func (b *blockBuilder) buildFunc(name string, f *ir.Func) llvm.Value {
 	}
 
 	b.buildBlock(f.Body)
-	retVal := b.buildCtx.retVal
-
-	if retVal.IsNil() {
-		theFunction.EraseFromParentAsFunction()
-		panic("retVal.IsNil")
-	}
-
-	b.builder.SetInsertPointAtEnd(b.buildCtx.retBlk)
-	b.builder.CreateRet(retVal)
-
 	b.finalizePhi()
 
 	if b.debug {
@@ -270,9 +272,19 @@ func (b *blockBuilder) buildFunc(name string, f *ir.Func) llvm.Value {
 	return theFunction
 }
 
+func (b *blockBuilder) buildRet(ident string, v *ir.Ret) llvm.Value {
+	ret := b.resolve(v.Target)
+	if ret.IsNil() {
+		panic("retVal.IsNil")
+	}
+
+	b.builder.CreateRet(ret)
+	return ret
+}
+
 func (b *blockBuilder) buildArrLit(ident string, al *ir.ArrLit) llvm.Value {
 	t := b.env.GetDefTrusted(ident)
-	elemTy := buildType(t.(*types.Arr).Ele)
+	elemTy := b.buildType(t.(*types.Arr).Ele)
 	sizeVal := llvm.ConstInt(intT, uint64(len(al.Args)), false /*signed*/)
 	alloca := b.builder.CreateArrayAlloca(elemTy, sizeVal, ident)
 
@@ -301,7 +313,7 @@ func (b *blockBuilder) buildArrPut(ident string, ap *ir.ArrPut) llvm.Value {
 
 func (b *blockBuilder) buildRecLit(ident string, rl *ir.RecLit) llvm.Value {
 	t := b.env.GetDefTrusted(ident)
-	tp := buildType(t)
+	tp := b.buildType(t)
 	alloca := b.builder.CreateAlloca(tp, ident)
 
 	for i, elem := range rl.Args {
@@ -331,7 +343,7 @@ func (b *blockBuilder) buildEnumVar(ident string, ev *ir.EnumVar) llvm.Value {
 		return llvm.ConstInt(intT, uint64(ev.Idx), false)
 	}
 
-	tp := buildType(semantics.EnumBox)
+	tp := b.buildType(semantics.EnumBox)
 	idxVal := llvm.ConstInt(intT, uint64(ev.Idx), false)
 	alloca := b.builder.CreateAlloca(tp, ident)
 	b.buildRecStore(alloca, idxVal, 0)
@@ -343,36 +355,21 @@ func (b *blockBuilder) buildEnumVar(ident string, ev *ir.EnumVar) llvm.Value {
 	return alloca
 }
 
-func (b *blockBuilder) buildDiscriminant(ident string, ev *ir.Discriminant) llvm.Value {
-	v := b.resolve(ev.Target)
-	if ev.Simple {
+func (b *blockBuilder) buildDiscriminant(ident string, dc *ir.Discriminant) llvm.Value {
+	v := b.resolve(dc.Target)
+	if dc.Simple {
 		return v
 	}
 	return b.buildRecLoad(v, 0)
 }
 
-func (b *blockBuilder) buildUnbox(ident string, ev *ir.Unbox) llvm.Value {
-	v := b.resolve(ev.Target)
-	return b.unboxWhole(v, ev.Tp)
-}
-
-func (b *blockBuilder) buildPtr(v llvm.Value, tp types.ValType) llvm.Value {
-	switch tp {
-	case types.Int:
-		return b.builder.CreateIntToPtr(v, llvm.PointerType(intT, 0), "")
-	case types.Float:
-		// return b.builder.CreatePtr(v, llvm.PointerType(intT, 0), "")
-		panic("TODO")
-	default:
-		return v
-	}
-}
-
-func (b *blockBuilder) box(v llvm.Value, tp, boxedTp types.ValType) llvm.Value {
-	if boxedTp.Code() == types.TpVar {
+func (b *blockBuilder) buildBox(ident string, bx *ir.Box) llvm.Value {
+	v := b.resolve(bx.Target)
+	tp, boxTp := bx.Tp, bx.BoxTp
+	if boxTp.Code() == types.TpVar {
 		return b.boxWhole(v, tp)
 	}
-	return b.boxRec(v, tp, boxedTp)
+	return b.boxRec(v, tp, boxTp)
 }
 
 func (b *blockBuilder) boxWhole(v llvm.Value, tp types.ValType) llvm.Value {
@@ -380,8 +377,21 @@ func (b *blockBuilder) boxWhole(v llvm.Value, tp types.ValType) llvm.Value {
 	return b.builder.CreateBitCast(v, voidPtrT, "")
 }
 
+func (b *blockBuilder) buildPtr(v llvm.Value, tp types.ValType) llvm.Value {
+	switch tp {
+	case types.Int:
+		return b.builder.CreateIntToPtr(v, llvm.PointerType(intT, 0), "")
+	case types.Float:
+		v = b.builder.CreateBitCast(v, intT, "")
+		v = b.builder.CreateIntToPtr(v, llvm.PointerType(intT, 0), "")
+		return b.builder.CreateBitCast(v, llvm.PointerType(floatT, 0), "")
+	default:
+		return v
+	}
+}
+
 func (b *blockBuilder) boxRec(v llvm.Value, tp, boxedTp types.ValType) llvm.Value {
-	t := buildType(boxedTp)
+	t := b.buildType(boxedTp)
 	boxed := b.builder.CreateAlloca(t, "")
 
 	for i, t := range boxedTp.(*types.Rec).MemTps {
@@ -394,15 +404,23 @@ func (b *blockBuilder) boxRec(v llvm.Value, tp, boxedTp types.ValType) llvm.Valu
 		case *types.Rec:
 			arg = b.boxRec(ele, unboxedTp, t)
 		default:
-			panic("TODO")
+			panic("TODO: " + t.String())
 		}
 		b.buildRecStore(boxed, arg, i)
 	}
 	return boxed
 }
 
+func (b *blockBuilder) buildUnbox(ident string, ub *ir.Unbox) llvm.Value {
+	v := b.resolve(ub.Target)
+	if ub.BoxTp.Code() == types.TpVar {
+		return b.unboxWhole(v, ub.Tp)
+	}
+	return b.unboxRec(v, ub.Tp, ub.BoxTp)
+}
+
 func (b *blockBuilder) unboxWhole(v llvm.Value, tp types.ValType) llvm.Value {
-	t := buildType(tp)
+	t := b.buildType(tp)
 	if tp.Code() == types.TpVar {
 		t = intT
 	}
@@ -413,17 +431,12 @@ func (b *blockBuilder) unboxWhole(v llvm.Value, tp types.ValType) llvm.Value {
 	case types.TpInt, types.TpVar:
 		return b.builder.CreatePtrToInt(v, t, "")
 	case types.TpFloat:
-		panic("TODO")
+		v = b.builder.CreateBitCast(v, llvm.PointerType(intT, 0), "")
+		v = b.builder.CreatePtrToInt(v, intT, "")
+		return b.builder.CreateBitCast(v, floatT, "")
 	default:
 		return v
 	}
-}
-
-func (b *blockBuilder) unbox(v llvm.Value, tp, boxedTp types.ValType) llvm.Value {
-	if boxedTp.Code() == types.TpVar {
-		return b.unboxWhole(v, tp)
-	}
-	return b.unboxRec(v, tp, boxedTp)
 }
 
 func (b *blockBuilder) unboxRec(v llvm.Value, tp, boxedTp types.ValType) llvm.Value {
@@ -437,7 +450,7 @@ func (b *blockBuilder) unboxRec(v llvm.Value, tp, boxedTp types.ValType) llvm.Va
 		return v
 	}
 
-	t := buildType(tp)
+	t := b.buildType(tp)
 	unboxed := b.builder.CreateAlloca(t, "")
 	for i, t := range boxedTp.(*types.Rec).MemTps {
 		unboxedTp := tp.(*types.Rec).MemTps[i]
@@ -456,14 +469,41 @@ func (b *blockBuilder) unboxRec(v llvm.Value, tp, boxedTp types.ValType) llvm.Va
 	return unboxed
 }
 
-func (b *blockBuilder) buildCall(c *ir.Call) llvm.Value {
+func (b *blockBuilder) buildBoxTrait(ident string, tb *ir.BoxTrait) llvm.Value {
+	origTp := b.typeOf(tb.Target)
+	imp := origTp.Impls()
+
+	tp := b.buildType(tb.Tp)
+	alloca := b.builder.CreateAlloca(tp, ident)
+
+	fnPart := b.builder.CreateStructGEP(alloca, 1, "rec")
+	for i, k := range tb.Tp.Keys {
+		_, ok := imp.Fns[k]
+		if !ok {
+			panic("unreachable. impl fn not found: " + k)
+		}
+		fnName := imp.Prefix + "$" + k
+		f := rootModule.NamedFunction(fnName)
+		fnptr := b.buildRecLoad(fnPart, i)
+		// pointer cast impl fun type to trait fun type
+		// See buildFuncType related `expandTrait` doc. trait func is correctly built but first param. Here actual func
+		// generated by call NamedFunction first param is different from `fnptr` func. The two funcs represent the same
+		// thing, but due to recursive type building issue, they have slightly different type. Thus here make a pointer cast.
+		f = b.builder.CreatePointerCast(f, fnptr.Type(), "fncast")
+		b.buildRecStore(fnPart, f, i)
+	}
+
+	targetTp := b.typeOf(tb.Target)
+	target := b.resolve(tb.Target)
+	target = b.boxWhole(target, targetTp)
+	b.buildRecStore(alloca, target, 0)
+	return alloca
+}
+
+func (b *blockBuilder) buildCall(c *ir.StaticCall) llvm.Value {
 	args := make([]llvm.Value, len(c.Args))
 	for i, arg := range c.Args {
 		v := b.resolve(arg)
-		if boxedTp := c.Boxes[i]; boxedTp != nil {
-			tp := b.env.GetDefTrusted(arg)
-			v = b.box(v, tp, boxedTp)
-		}
 		args[i] = v
 	}
 
@@ -472,14 +512,40 @@ func (b *blockBuilder) buildCall(c *ir.Call) llvm.Value {
 		panic("function " + c.Name + " not found in llvm module")
 	}
 	ret := b.builder.CreateCall(f, args, "")
-	if boxedTp := c.Boxes[len(c.Boxes)-1]; boxedTp != nil {
-		return b.unbox(ret, c.Tp, boxedTp)
-	}
 	return ret
 }
 
+func (b *blockBuilder) buildTraitCall(c *ir.TraitCall) llvm.Value {
+	target := b.resolve(c.Args[0])
+	fnIdx := -1
+	for i, k := range c.Trait.Keys {
+		if k == c.Name {
+			fnIdx = i
+		}
+	}
+	if fnIdx == -1 {
+		panic("unreachable. trait fn not found: " + c.Name)
+	}
+
+	args := make([]llvm.Value, len(c.Args))
+	for i, arg := range c.Args {
+		v := b.resolve(arg)
+		args[i] = v
+	}
+
+	fns := b.builder.CreateStructGEP(target, 1, "")
+	fn := b.buildRecLoad(fns, fnIdx)
+	for i, arg := range args {
+		if i == 0 {
+			// load data part of index 0
+			args[i] = b.buildRecLoad(arg, 0)
+		}
+	}
+	return b.builder.CreateCall(fn, args, "trait call")
+}
+
 func (b *blockBuilder) buildPhi(it *ir.Phi) llvm.Value {
-	tp := buildType(it.Tp)
+	tp := b.buildType(it.Tp)
 	phiVal := b.builder.CreatePHI(tp, it.Orig)
 	b.buildCtx.phiPending = append(b.buildCtx.phiPending, phiContext{
 		v:   phiVal,
@@ -520,16 +586,16 @@ func (b *blockBuilder) buildIf(ident string, it *ir.If) llvm.Value {
 	return llvm.ConstNull(intT)
 }
 
-func buildTypePtr(tp types.ValType) llvm.Type {
-	if tp.Code() == types.TpRec || tp.Code() == types.TpArr {
-		return llvm.PointerType(buildType(tp), 0)
+func (b *blockBuilder) buildTypePtr(tp types.ValType) llvm.Type {
+	if tp.Code() == types.TpRec || tp.Code() == types.TpArr || tp.Code() == types.TpTrait {
+		return llvm.PointerType(b.buildType(tp), 0)
 	}
-	return buildType(tp)
+	return b.buildType(tp)
 }
 
 // TODO rec类型在llvm类型推断系统里应该被pointer封装，但是在alloca时则不需要，所以独立了一个buildTypePtr
 // 这部分的区分逻辑需要优化的写法
-func buildType(tp types.ValType) llvm.Type {
+func (b *blockBuilder) buildType(tp types.ValType) llvm.Type {
 	switch tp.Code() {
 	case types.TpBool:
 		return boolT
@@ -544,18 +610,25 @@ func buildType(tp types.ValType) llvm.Type {
 	case types.TpArr:
 		arrTp := tp.(*types.Arr)
 		return context.StructType([]llvm.Type{
-			llvm.PointerType(buildType(arrTp.Ele), 0),
+			llvm.PointerType(b.buildType(arrTp.Ele), 0),
 			intT,
 		}, false)
 	case types.TpRec:
 		recTp := tp.(*types.Rec)
 		tps := []llvm.Type{}
 		for _, tp := range recTp.MemTps {
-			tps = append(tps, buildType(tp))
+			memTp := b.buildType(tp)
+			if tp.Code() == types.TpRec {
+				memTp = llvm.PointerType(memTp, 0)
+			}
+			tps = append(tps, memTp)
 		}
 		return context.StructType(tps, false)
 	case types.TpFunc:
-		return buildFuncType(tp.(*types.Func))
+		return b.buildFuncType(tp.(*types.Func), false)
+	case types.TpTrait:
+		traitTp := tp.(*types.Trait)
+		return b.buildTraitType(traitTp)
 	default:
 		panic("unsupported type: " + tp.String())
 	}
@@ -568,13 +641,41 @@ func (b *blockBuilder) typeOf(ident string) types.ValType {
 	panic("Type was not found for ident: " + ident)
 }
 
-func buildFuncType(tp *types.Func) llvm.Type {
+func (b *blockBuilder) buildFuncType(tp *types.Func, expandTrait bool) llvm.Type {
 	params := make([]llvm.Type, len(tp.Params))
 	for i, param := range tp.Params {
-		params[i] = buildTypePtr(param)
+		// if param is trait type and expandTrait is false, then give llvm void* type.
+		// there is a paradox if expandTrait set to true for trait function:
+		// type trait_b = trait { f1():int } desugar -> type b = trait {f1(self:trait_b):int}. trait_b type is a recursive type.
+		// To build trait_b type, f1 must be built beforehand and f1's first param trait_b must be built, this forms a recursive
+		// building process infinitely.
+		// Recursive type might not be a program if you are using c/c++ llvm api, but there is no good way of golang llvm api to
+		// implement it. For c/c++ llvm api, you can just create a empty trait llvm type and put pointer of trait as first param
+		// of f1 func. After all trait funcs are handled, fill trait's func types. But golang llvm api doest not directly expose
+		// pointer or reference of a llvm type. A type is created as an immutable form and is different to change after create.
+		// Thus `expandTrait` is introduced to disable build trait func's first param, which disable infinite trait type building
+		// process.
+		if param.Code() == types.TpTrait && !expandTrait {
+			params[i] = voidPtrT
+		} else {
+			params[i] = b.buildTypePtr(param)
+		}
 	}
-	retTp := buildTypePtr(tp.Ret)
+	retTp := b.buildTypePtr(tp.Ret)
 	return llvm.FunctionType(retTp, params, false)
+}
+
+func (b *blockBuilder) buildTraitType(tp *types.Trait) llvm.Type {
+	var fnTps []llvm.Type
+	for _, traitFn := range tp.Fns {
+		fnTp := b.buildFuncType(traitFn, false)
+		fnTps = append(fnTps, llvm.PointerType(fnTp, 0))
+	}
+	memTps := []llvm.Type{
+		voidPtrT,
+		context.StructType(fnTps, false),
+	}
+	return context.StructType(memTps, false)
 }
 
 func (b *blockBuilder) resolve(ident string) llvm.Value {
@@ -594,7 +695,6 @@ func (b *blockBuilder) buildBlock(block *ir.Block) llvm.Value {
 	for _, i := range block.Ins {
 		v = b.buildInsn(i)
 	}
-	buildBlk := b.builder.GetInsertBlock()
 	last := block.Ins[len(block.Ins)-1]
 	if _, ok := last.Val.(*ir.If); !ok && len(block.Dest) > 0 {
 		dest := block.Dest[0]
@@ -610,11 +710,6 @@ func (b *blockBuilder) buildBlock(block *ir.Block) llvm.Value {
 			b.builder.CreateBr(destBlk)
 			b.builder.SetInsertPointAtEnd(destBlk)
 		}
-	}
-	// TODO DOC 无dest，则为最后一个block
-	if len(block.Dest) == 0 {
-		b.buildCtx.retVal = v
-		b.buildCtx.retBlk = buildBlk
 	}
 	return v
 }
@@ -728,6 +823,8 @@ func (b *blockBuilder) buildVal(ident string, v ir.Val) llvm.Value {
 		}
 	case *ir.Block:
 		return b.buildBlock(expr)
+	case *ir.Ret:
+		return b.buildRet(ident, expr)
 	case *ir.If:
 		// TODO: a = if ... then to if {}
 		return b.buildIf(ident, expr)
@@ -745,14 +842,20 @@ func (b *blockBuilder) buildVal(ident string, v ir.Val) llvm.Value {
 		return b.buildEnumVar(ident, expr)
 	case *ir.Discriminant:
 		return b.buildDiscriminant(ident, expr)
+	case *ir.Box:
+		return b.buildBox(ident, expr)
+	case *ir.BoxTrait:
+		return b.buildBoxTrait(ident, expr)
 	case *ir.Unbox:
 		return b.buildUnbox(ident, expr)
 	case *ir.Func:
 		// TODO: i.Ident应该是需要隐藏的，函数名应该放在ir.Fun里
 		// TODO 到底用ident还是expr.Body.Name
 		return b.buildFunc(expr.Body.Name, expr)
-	case *ir.Call:
+	case *ir.StaticCall:
 		return b.buildCall(expr)
+	case *ir.TraitCall:
+		return b.buildTraitCall(expr)
 	case *ir.Phi:
 		return b.buildPhi(expr)
 	}

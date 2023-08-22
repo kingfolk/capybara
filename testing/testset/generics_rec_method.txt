@@ -1,0 +1,47 @@
+//@anon int(10)
+type person_mt = rec[P]{age:P};
+fun (p person_mt[P]) get(): P = {
+    p.age
+};
+
+fun f1(): int = {
+    let b = person_mt[int]{age:10};
+    b.get()
+}; f1()
+$$
+
+//@anon int(11)
+type person_mt1 = rec{age:int};
+fun (p person_mt1) get[T](a:T): T = {
+    a
+};
+
+fun f2(): int = {
+    let b = person_mt1{age:100};
+    b.get[int](11)
+}; f2()
+$$
+
+//@anon int(100)
+type person_mt2 = rec[P]{age:P};
+fun (p person_mt2[P]) get[T](a:T): P = {
+    p.age
+};
+
+fun f3(): int = {
+    let b = person_mt2[int]{age:100};
+    b.get[float](1.1)
+}; f3()
+$$
+
+//@anon float(1.1)
+type person_mt3 = rec[P]{age:P};
+fun (p person_mt3[P]) get[T](a:T): T = {
+    a
+};
+
+fun f4(): float = {
+    let b = person_mt3[int]{age:100};
+    b.get[float](1.1)
+}; f4()
+$$

@@ -18,11 +18,10 @@ import (
 	node ast.Expr
 	nodes []ast.Expr
 	token *token.Token
-	funcdef *ast.FuncDef
 	decls []*ast.Symbol
 	decl *ast.Symbol
 	params []ast.Param
-	namedargs []ast.NamedArg
+	param *ast.Param
 	program *ast.AST
 }
 
@@ -58,6 +57,7 @@ import (
 %token<token> IN
 %token<token> REC
 %token<token> TUP
+%token<token> TRAIT
 %token<token> ENUM
 %token<token> COMMA
 %token<token> ARRAY
@@ -120,20 +120,24 @@ import (
 %type<nodes> seq_case
 %type<node> vardef
 %type<nodes> args
+%type<param> opt_fun_receiver
 %type<params> params
 %type<params> func_params
 %type<params> opt_params
 %type<decls> id_list
 %type<decls> opt_type_params
-%type<namedargs> named_args
+%type<params> named_args
 %type<node> simple_type_annotation
 %type<node> type
 %type<nodes> seq_type
+%type<node> trait_fun
+%type<nodes> seq_trait_fun
 %type<node> simple_type
 %type<node> array_type
 %type<node> rec_type
 %type<node> tup_type
 %type<node> enum_type
+%type<node> trait_type
 %type<program> toplevels
 %type<> program
 
@@ -321,16 +325,20 @@ exp:
 			ref := &ast.VarRef{$3, sym($3)}
 			$$ = &ast.DotAcs{$1, ref, $3}
 		}
-	| FUN IDENT opt_type_params func_params simple_type_annotation EQUAL LCURLY seq_exp RCURLY
+	| FUN opt_fun_receiver IDENT opt_type_params func_params simple_type_annotation EQUAL LCURLY seq_exp RCURLY
 		%prec prec_fun
 		{
-			ident := sym($2)
+			ident := sym($3)
 			def := &ast.FuncDef{
+				FuncType: ast.FuncType{
+					Token: $1,
+					Params: $5,
+					TpParams: $4,
+					RetType: $6,
+				},
 				Symbol: ident,
-				Params: $4,
-				TpParams: $3,
-				Body: $8,
-				RetType: $5,
+				Rcv: $2,
+				Body: $9,
 			}
 			ref := &ast.VarRef{$1, ident}
 			$$ = &ast.LetRec{
@@ -393,13 +401,13 @@ params:
 	IDENT COLON type
 		{ $$ = []ast.Param{ast.Param{$1, sym($1), $3}} }
 	| opt_params COMMA IDENT COLON type
-		{ $$ = append($1, ast.Param{$2, sym($3), $5}) }
+		{ $$ = append($1, ast.Param{$3, sym($3), $5}) }
 
 named_args:
 	IDENT COLON exp
-		{ $$ = []ast.NamedArg{ast.NamedArg{sym($1), $3}} }
+		{ $$ = []ast.Param{ast.Param{$1, sym($1), $3}} }
 	| named_args COMMA IDENT COLON exp
-		{ $$ = append($1, ast.NamedArg{sym($3), $5}) }
+		{ $$ = append($1, ast.Param{$3, sym($3), $5}) }
 
 args:
 		{ $$ = []ast.Expr{} }
@@ -434,6 +442,8 @@ type:
 	| tup_type
 		{ $$ = $1 }
 	| enum_type
+		{ $$ = $1 }
+	| trait_type
 		{ $$ = $1 }
 
 seq_type:
@@ -478,10 +488,52 @@ enum_type:
 			$$ = &ast.CtorType{$1, $5, $4, $2, sym($1)}
 		}
 
+trait_type:
+	TRAIT opt_type_params LCURLY seq_trait_fun RCURLY
+		{
+			$$ = &ast.CtorType{$1, $5, $4, $2, sym($1)}
+		}
+
+trait_fun:
+	IDENT func_params simple_type_annotation
+		{
+			tp := &ast.FuncType{
+				Token: $1,
+				Params: $2,
+				RetType: $3,
+			}
+			$$ = ast.Param{$1, sym($1), tp}
+		}
+
+seq_trait_fun:
+	trait_fun
+		{ $$ = []ast.Expr{$1} }
+	| seq_trait_fun trait_fun
+		{ $$ = append($1, $2) }
+
 opt_type_params:
 		{ $$ = nil }
 	| LBRACKET id_list RBRACKET
 		{ $$ = $2 }
+
+opt_fun_receiver:
+		{ $$ = nil }
+	| LPAREN IDENT exp RPAREN
+		{
+			var tp *ast.CtorType
+			if e, ok := $3.(*ast.VarRef); ok {
+				tp = &ast.CtorType{$1, $4, nil, nil, e.Symbol}
+			} else if e, ok := $3.(*ast.ApplyBracket); ok {
+				rcv, ok := e.Expr.(*ast.VarRef)
+				if !ok {
+					yylex.Error("illegal trait access. trait func call syntax error")
+				}
+				tp = &ast.CtorType{$1, $4, e.Args, nil, rcv.Symbol}
+			} else {
+				yylex.Error("illegal trait access. trait func call syntax error")
+			}
+			$$ = &ast.Param{$1, sym($2), tp}
+		}
 
 id_list:
 	IDENT

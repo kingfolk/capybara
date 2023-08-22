@@ -1,0 +1,121 @@
+/*@bb
+#bb0:$root$
+{
+  $v1 = person$incre($v1)
+  $v2 = f_trait1($v1)
+  $v3 = f_trait()
+  $v4 = f_trait() 
+  $v5 = Return $v4
+}
+
+person$incre($v1){
+  #bb0:person$incre
+  {
+    $v2 = $v1
+    $v3 = $v2.0
+    $v4 = 1
+    $v5 = $v3+$v4
+    $v6 = Return $v5
+  }
+}
+f_trait1($v1){
+  #bb0:f_trait1
+  {
+    $v2 = $v1
+    $v3 = $v1
+    $v4 = TraitCall(incre,$v3) 
+    $v5 = Return $v4
+  }
+}
+f_trait(){
+  #bb0:f_trait
+  {
+    $v1 = 100
+    $v2 = Rec<int>($v1) 
+    $v3 = $v2
+    $v4 = BoxTrait($v3)
+    $v5 = f_trait1($v4) 
+    $v6 = Return $v5
+  }
+}
+*/
+//@anon int(101)
+type person = rec{age:int};
+type counter = trait{
+    incre(): int
+};
+
+fun (p person) incre(): int = {
+    p.age + 1
+};
+
+fun f_trait1(c:counter): int = {
+    c.incre()
+};
+
+fun f_trait(): int = {
+    let b = person{age:100};
+    f_trait1(b)
+};
+
+f_trait()
+$$
+
+//@anon int(12)
+type person1 = rec{age:int};
+type counter = trait{
+    incre(a:int): int
+};
+
+fun (p person1) incre(a:int): int = {
+    p.age + a + 1
+};
+
+fun f_trait2(): int = {
+    let c:counter;
+    c = person1{age:10};
+    c.incre(1)
+}; 
+
+f_trait2()
+$$
+
+//@anon int(1001)
+type person = rec{age:int};
+type counter = trait{
+    incre(): int
+};
+
+fun (p person) incre(): int = {
+    p.age + 1
+};
+
+fun f_trait3(): counter = {
+    person{age:1000}
+};
+
+fun f_trait4(): int = {
+    let b = f_trait3();
+    b.incre()
+};
+
+f_trait4()
+$$
+
+//@anon int(12)
+type person1 = rec{age:int};
+type counter = trait{
+    incre(a:int): int
+};
+
+fun (p person1) incre(a:int): int = {
+    p.age + a + 1
+};
+
+fun f_trait5(): int = {
+    let c:counter = person1{age:10};
+    c.incre(1)
+}; 
+
+f_trait5()
+$$

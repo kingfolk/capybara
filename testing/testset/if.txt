@@ -2,6 +2,7 @@
 #bb0:$root$
 {
   $v1 = f($v1)
+  $v2 = Return $v1
 }
 
 f($v1){
@@ -22,16 +23,17 @@ f($v1){
   
   #bb2:if $v5 else; from #bb0
   {
-    $v15 = 300
-    $v16 = $v15
+    $v16 = 300
+    $v17 = $v16
   }; to #bb3
   
   #bb3:if $v5 after; from #bb1 ,#bb2
   {
-    $v11 = Phi($v8, $v16)
+    $v11 = Phi($v8, $v17)
     $v12 = $v11
     $v13 = 123
     $v14 = $v12+$v13
+    $v15 = Return $v14
   }
 }
 */

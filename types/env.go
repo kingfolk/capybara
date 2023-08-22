@@ -10,30 +10,42 @@ type (
 	Env struct {
 		Types map[string]ValType
 		Defs  map[string]ValType
-		Boxes map[string]TpBox
 	}
+
+	ImplBundle struct {
+		Prefix string
+		Fns    map[string]*Func
+	}
+
+	VoidImplBundle struct{}
 
 	ValType interface {
 		String() string
 		Code() int
+		Impls() *ImplBundle
 	}
 
 	primitiveType struct {
+		VoidImplBundle
 		tp int
 	}
 
 	Func struct {
+		VoidImplBundle
+		Uid    uint64
 		Ret    ValType
 		Params []ValType
 		TpVars []*TypeVar
 	}
 
 	Arr struct {
+		VoidImplBundle
 		Ele  ValType
 		Size int
 	}
 
 	Rec struct {
+		ImplBundle
 		Uid    uint64
 		Keys   []string
 		MemTps []ValType
@@ -42,6 +54,7 @@ type (
 	}
 
 	Enum struct {
+		ImplBundle
 		Uid    uint64
 		Simple bool
 		Tokens []string
@@ -49,16 +62,27 @@ type (
 		Tps    []ValType
 	}
 
+	Trait struct {
+		VoidImplBundle
+		Uid    uint64
+		Keys   []string
+		Fns    []*Func
+		TpVars []*TypeVar
+	}
+
 	Symbol struct {
+		VoidImplBundle
 		Uid  uint64
 		Name string
 	}
 
 	TypeVar struct {
+		VoidImplBundle
 		Name string
 	}
 
 	App struct {
+		VoidImplBundle
 		TpCon  ValType
 		TpArgs []ValType
 		Args   []ValType
@@ -75,6 +99,7 @@ const (
 	TpArr
 	TpRec
 	TpEnum
+	TpTrait
 	TpSym
 	TpFunc
 	TpApp
@@ -92,9 +117,12 @@ var (
 
 var _ ValType = (*primitiveType)(nil)
 var _ ValType = (*Func)(nil)
+var _ ValType = (*App)(nil)
 var _ ValType = (*TypeVar)(nil)
+var _ ValType = (*Arr)(nil)
 var _ ValType = (*Rec)(nil)
 var _ ValType = (*Enum)(nil)
+var _ ValType = (*Trait)(nil)
 var _ ValType = (*Symbol)(nil)
 
 func IsPrimitive(t ValType) bool {
@@ -115,6 +143,14 @@ func (e *Env) GetDef(ident string) (ValType, bool) {
 	return t, ok
 }
 
+func (t *ImplBundle) Impls() *ImplBundle {
+	return t
+}
+
+func (t VoidImplBundle) Impls() *ImplBundle {
+	return nil
+}
+
 func (t *primitiveType) String() string {
 	switch t.tp {
 	case TpUnit:
@@ -122,7 +158,7 @@ func (t *primitiveType) String() string {
 	case TpInt:
 		return "int"
 	case TpFloat:
-		return "double"
+		return "float"
 	case TpBool:
 		return "bool"
 	default:
@@ -212,6 +248,32 @@ func (t *Enum) KeyIndex(key string) (int, bool) {
 	return -1, false
 }
 
+func (t *Trait) String() string {
+	str := "trait"
+	if len(t.TpVars) > 0 {
+		str += "<"
+		for i, tpVar := range t.TpVars {
+			if i > 0 {
+				str += ", "
+			}
+			str += tpVar.String()
+		}
+		str += ">"
+	}
+	str += "{"
+	for i, k := range t.Keys {
+		if i > 0 {
+			str += ", "
+		}
+		str += k
+	}
+	return str + "}"
+}
+
+func (t *Trait) Code() int {
+	return TpTrait
+}
+
 func (t *Symbol) Code() int {
 	return TpSym
 }
@@ -232,13 +294,14 @@ func (t *Func) String() string {
 		}
 		str += ">"
 	}
+	str += "("
 	for i, p := range t.Params {
 		if i > 0 {
 			str += ", "
 		}
 		str += p.String()
 	}
-	return "(" + str + ")" + "->" + t.Ret.String()
+	return str + ")" + "->" + t.Ret.String()
 }
 
 func (t *Func) Code() int {
@@ -276,4 +339,8 @@ func (t *App) String() string {
 
 func (t *App) Code() int {
 	return TpApp
+}
+
+func (t *App) Impls() *ImplBundle {
+	return nil
 }

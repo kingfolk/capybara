@@ -93,6 +93,8 @@ func EmitIR(mod *ast.AST, debugMode bool, globals ...GlobalDef) (root *ir.Module
 		fmt.Println("--- original anon bb end ---")
 	}
 
+	retTp := blk.Ins[len(blk.Ins)-1].Type()
+	e.insertReturn(blk, retTp)
 	maker := ir.NewDominatorMaker(blk, e.debug)
 	declTable := maker.Lift(e.env.Defs)
 	root = e.module
@@ -214,7 +216,7 @@ func (e *Emitter) emitInsn(node ast.Expr) *ir.Instr {
 	case *ast.Mutate:
 		return e.emitMutateInsn(n)
 	case *ast.LetRec:
-		return e.emitFunInsn(n)
+		return e.emitFuncInsn(n)
 	default:
 		panic(fmt.Sprintf("unsupported instr %s: %+v", node.Name(), node))
 	}
@@ -265,6 +267,14 @@ func (e *Emitter) registerDecl(name, bound string) {
 }
 
 func (e *Emitter) emitLetInsn(node *ast.Let) *ir.Instr {
+	if node.Bound == nil {
+		bound := e.emitInsn(&ast.Unit{})
+		e.registerDecl(node.Symbol.Name, bound.Ident)
+		tp := e.emitType(node.Type)
+		e.env.Defs[node.Symbol.Name] = tp
+		e.env.Defs[bound.Ident] = tp
+		return bound
+	}
 	bound := e.emitInsn(node.Bound)
 	e.registerDecl(node.Symbol.Name, bound.Ident)
 	if i, ok := bound.Val.(*ir.If); ok {
@@ -274,12 +284,41 @@ func (e *Emitter) emitLetInsn(node *ast.Let) *ir.Instr {
 	if node.Type != nil {
 		tp := e.emitType(node.Type)
 		e.env.Defs[node.Symbol.Name] = tp
+		if tp.Code() == types.TpTrait {
+			bound = e.emitBoxTrait(bound.Ident, tp.(*types.Trait))
+		}
 		right := e.env.GetDefTrusted(bound.Ident)
 		if err := types.TypeCompatible(tp, right); err != nil {
 			panic(err)
 		}
 	}
 	return bound
+}
+
+func (e *Emitter) emitBox(target string, tp, boxTp types.ValType) (*ir.Instr, *ir.Box) {
+	val := &ir.Box{
+		Tp:     tp,
+		BoxTp:  boxTp,
+		Target: target,
+	}
+	return e.rvalInstr(val), val
+}
+
+func (e *Emitter) emitBoxTrait(target string, tp *types.Trait) *ir.Instr {
+	val := &ir.BoxTrait{
+		Tp:     tp,
+		Target: target,
+	}
+	return e.rvalInstr(val)
+}
+
+func (e *Emitter) emitUnbox(target string, tp, boxTp types.ValType) *ir.Instr {
+	unbox := &ir.Unbox{
+		Tp:     tp,
+		BoxTp:  boxTp,
+		Target: target,
+	}
+	return e.rvalInstr(unbox)
 }
 
 func (e *Emitter) emitMutateInsn(node *ast.Mutate) *ir.Instr {
@@ -292,6 +331,9 @@ func (e *Emitter) emitMutateInsn(node *ast.Mutate) *ir.Instr {
 	rightTp := e.env.GetDefTrusted(right.Ident)
 	if err := types.TypeCompatible(tp, rightTp); err != nil {
 		panic(err)
+	}
+	if tp.Code() == types.TpTrait {
+		right = e.emitBoxTrait(right.Ident, tp.(*types.Trait))
 	}
 	if i, ok := right.Val.(*ir.If); ok {
 		e.mutateIdentEndOfBlock(right.Ident, i.Then, i.Else)
@@ -373,11 +415,7 @@ func (e *Emitter) emitMatchInsn(n *ast.Match) *ir.Instr {
 			if len(varTp.Keys) != len(dot.Args) {
 				panic(errors.NewError(errors.TYPE_RECORD_NOT_FULFILLED, "enum match literal not fulfilled."))
 			}
-			unbox := &ir.Unbox{
-				Tp:     tp,
-				Target: unwrap.Ident,
-			}
-			unboxIr := e.rvalInstr(unbox)
+			unboxIr := e.emitUnbox(unwrap.Ident, tp, &types.TypeVar{Name: "dummy"})
 			for i, arg := range dot.Args {
 				v, ok := arg.(*ast.VarRef)
 				if !ok {
@@ -463,7 +501,7 @@ func (e *Emitter) emitMatchInsn(n *ast.Match) *ir.Instr {
 	return firstIf
 }
 
-func (e *Emitter) emitFunInsn(node *ast.LetRec) *ir.Instr {
+func (e *Emitter) emitFuncInsn(node *ast.LetRec) *ir.Instr {
 	origScope := e.scope
 	e.scope = NewScope()
 	for k := range e.globals {
@@ -471,15 +509,38 @@ func (e *Emitter) emitFunInsn(node *ast.LetRec) *ir.Instr {
 	}
 
 	name := node.Func.Symbol.Name
-	// ty, ok := e.env.DeclTable[name]
-	// if !ok {
-	// 	panic("FATAL: Unknown function: " + name)
-	// }
+	paramDefs := node.Func.Params
+	var funTp *types.Func
+	if node.Func.Rcv != nil {
+		paramDefs = append([]ast.Param{*node.Func.Rcv}, paramDefs...)
+		rcv, ok := node.Func.Rcv.Type.(*ast.CtorType)
+		if !ok {
+			panic("unreachable. receiver type must be CtorType")
+		}
+		tpName := rcv.Ctor.Name
+		fnName := name
+		name = tpName + "$" + fnName
+		rcvTp, ok := e.env.Types[tpName]
+		if !ok {
+			panic(errors.NewError(errors.TYPE_METHOD_ILLEGAL, "receiver type not found: "+tpName))
+		}
+		impl := rcvTp.Impls()
+		if rcvTp.Impls() == nil {
+			panic(errors.NewError(errors.TYPE_METHOD_ILLEGAL, "receiver type cannot be have method: "+tpName))
+		}
+		defer func() {
+			impl.Fns[fnName] = funTp
+			if tRec, ok := rcvTp.(*types.Rec); ok {
+				funTp.TpVars = append(funTp.TpVars, tRec.TpVars...)
+			}
+		}()
+		impl.Prefix = tpName
+	}
 
-	params := make([]string, 0, len(node.Func.Params))
-	paramTypes := make([]types.ValType, len(node.Func.Params))
+	params := make([]string, 0, len(paramDefs))
+	paramTypes := make([]types.ValType, len(paramDefs))
 	tpVars := make([]*types.TypeVar, len(node.Func.TpParams))
-	for i, param := range node.Func.Params {
+	for i, param := range paramDefs {
 		paramName := param.Ident.Name
 		ident := e.genID()
 		params = append(params, ident)
@@ -499,7 +560,9 @@ func (e *Emitter) emitFunInsn(node *ast.LetRec) *ir.Instr {
 		fmt.Println("--- original bb end ---")
 	}
 
-	funTp := &types.Func{
+	types.TpUidCounter++
+	funTp = &types.Func{
+		Uid:    types.TpUidCounter,
 		Params: paramTypes,
 		Ret:    e.emitType(node.Func.RetType),
 		TpVars: tpVars,
@@ -531,13 +594,51 @@ func (e *Emitter) emitFunInsn(node *ast.LetRec) *ir.Instr {
 		Body:   blk,
 		Tp:     funTp,
 	}
+	e.insertReturn(blk, funTp.Ret)
 
 	maker := ir.NewDominatorMaker(blk, e.debug, params...)
 	defs := maker.Lift(e.env.Defs)
+	val.Params = maker.LiftParams
 	val.Defs = defs
 
 	e.scope = origScope
 	return e.instr(val, name, ir.FuncKind)
+}
+
+func (e *Emitter) insertReturn(blk *ir.Block, retTp types.ValType) {
+	visited := map[int]bool{}
+	stack := []*ir.Block{blk}
+	visited[blk.Id] = true
+	for len(stack) > 0 {
+		top := stack[0]
+		visited[top.Id] = true
+		stack = stack[1:]
+		if len(top.Dest) == 0 {
+			e.scope.blk = top
+			target := top.Ins[len(top.Ins)-1].Ident
+			targetTp := e.env.GetDefTrusted(target)
+			if retTp.Code() == types.TpTrait {
+				rt := retTp.(*types.Trait)
+				tt, ok := targetTp.(*types.Trait)
+				if !ok || tt.Uid != rt.Uid {
+					boxed := e.emitBoxTrait(target, rt)
+					target = boxed.Ident
+				}
+			}
+
+			ret := &ir.Ret{
+				Tp:     retTp,
+				Target: target,
+			}
+			e.rvalInstr(ret)
+		}
+		for _, d := range top.Dest {
+			if !visited[d.Id] {
+				stack = append(stack, d)
+				visited[d.Id] = true
+			}
+		}
+	}
 }
 
 func (e *Emitter) emitArrLitInsn(node *ast.ArrayLit) *ir.Instr {
@@ -602,7 +703,7 @@ func (e *Emitter) emitRecLitInsn(node *ast.RecLit) *ir.Instr {
 		if entry := args[idx]; entry != "" {
 			panic(errors.NewError(errors.TYPE_RECORD_NOT_FULFILLED, "struct literal not fulfilled"))
 		}
-		i := e.emitInsn(arg.Arg)
+		i := e.emitInsn(arg.Type)
 		args[idx] = i.Ident
 		tpArg := e.env.GetDefTrusted(i.Ident)
 		argTps[idx] = tpArg
@@ -696,15 +797,55 @@ func (e *Emitter) emitDotAcsInsn(node *ast.DotAcs) *ir.Instr {
 	var val ir.Val
 	switch tp := t.(type) {
 	case *types.Rec:
-		vr, ok := node.Dot.(*ast.VarRef)
-		if !ok {
+		if vr, ok := node.Dot.(*ast.VarRef); ok {
+			idx := tp.KeyIndex(vr.Symbol.Name)
+			val = &ir.RecAcs{
+				Tp:     tp.MemTps[idx],
+				Target: target.Ident,
+				Idx:    idx,
+			}
+		} else if ap, ok := node.Dot.(*ast.Apply); ok {
+			vr, ok := ap.Callee.(*ast.VarRef)
+			if !ok {
+				panic(errors.NewError(errors.TYPE_RECORD_ACS_ILLEGAL, "record access syntax error"))
+			}
+			var name string
+			for k, t := range e.env.Types {
+				if tRec, ok := t.(*types.Rec); ok {
+					if tRec.Uid == tp.Uid {
+						name = k
+						break
+					}
+				}
+			}
+			if name == "" {
+				panic("unreachable. ")
+			}
+			args := append([]ast.Expr{node.Expr}, ap.Args...)
+			tFun, ok := tp.Impls().Fns[vr.Symbol.Name]
+			if !ok {
+				panic(errors.NewError(errors.TYPE_RECORD_ACS_ILLEGAL, "illegal record access. undefined method"))
+			}
+			var tpArgs []types.ValType
+			for _, tpArg := range ap.TpArgs {
+				tpArgs = append(tpArgs, e.emitType(tpArg))
+			}
+			return e.emitCall(tFun, name+"$"+vr.Symbol.Name, args, append(tpArgs, tp.Substs...))
+		} else {
 			panic(errors.NewError(errors.TYPE_RECORD_ACS_ILLEGAL, "record access syntax error"))
 		}
-		idx := tp.KeyIndex(vr.Symbol.Name)
-		val = &ir.RecAcs{
-			Tp:     tp.MemTps[idx],
-			Target: target.Ident,
-			Idx:    idx,
+	case *types.Trait:
+		if _, ok := node.Dot.(*ast.VarRef); ok {
+			panic(errors.NewError(errors.TYPE_TRAIT_ACS_ILLEGAL, "illegal trait access. missing parenthesis?"))
+		} else if ap, ok := node.Dot.(*ast.Apply); ok {
+			vr, ok := ap.Callee.(*ast.VarRef)
+			if !ok {
+				panic(errors.NewError(errors.TYPE_TRAIT_ACS_ILLEGAL, "illegal trait access. trait func call syntax error"))
+			}
+			args := append([]ast.Expr{node.Expr}, ap.Args...)
+			return e.emitTraitAppInsn(vr.Symbol.Name, tp, args)
+		} else {
+			panic(errors.NewError(errors.TYPE_TRAIT_ACS_ILLEGAL, "illegal trait access. trait func call syntax error"))
 		}
 	case *types.Enum:
 		vr, ok := node.Dot.(*ast.VarRef)
@@ -724,6 +865,38 @@ func (e *Emitter) emitDotAcsInsn(node *ast.DotAcs) *ir.Instr {
 	return e.rvalInstr(val)
 }
 
+func (e *Emitter) emitTraitAppInsn(fnName string, t *types.Trait, argNodes []ast.Expr) *ir.Instr {
+	var tFun *types.Func
+	for i, k := range t.Keys {
+		if k == fnName {
+			tFun = t.Fns[i]
+		}
+	}
+	if tFun == nil {
+		panic(errors.NewError(errors.TYPE_TRAIT_ACS_ILLEGAL, "trait func undefined: "+fnName))
+	}
+	if len(argNodes) != len(tFun.Params) {
+		panic(errors.NewError(errors.TYPE_PARAM_COUNT_WRONG, "call arg count not aligned"))
+	}
+
+	args := make([]string, len(argNodes))
+	argTps := make([]types.ValType, len(argNodes))
+	for i, arg := range argNodes {
+		arg := e.emitInsn(arg)
+		args[i] = arg.Ident
+		argTps[i] = e.env.GetDefTrusted(arg.Ident)
+	}
+
+	val := &ir.TraitCall{
+		Name:  fnName,
+		Trait: t,
+		Tp:    tFun.Ret,
+		Args:  args,
+	}
+
+	return e.rvalInstr(val)
+}
+
 func (e *Emitter) emitAppInsn(node *ast.Apply) *ir.Instr {
 	ref, ok := node.Callee.(*ast.VarRef)
 	if !ok {
@@ -731,15 +904,15 @@ func (e *Emitter) emitAppInsn(node *ast.Apply) *ir.Instr {
 	}
 	tp, ok := e.env.Types[ref.Symbol.Name]
 	if ok {
-		args := []ast.NamedArg{}
+		args := []ast.Param{}
 		tr := tp.(*types.Rec)
 		if len(node.Args) != len(tr.Keys) {
 			panic(errors.NewError(errors.TYPE_RECORD_NOT_FULFILLED, "literal not fulfilled"))
 		}
 		for i, arg := range node.Args {
-			args = append(args, ast.NamedArg{
+			args = append(args, ast.Param{
 				Ident: ast.NewSymbol(tr.Keys[i]),
-				Arg:   arg,
+				Type:  arg,
 			})
 		}
 		recLit := &ast.RecLit{
@@ -755,41 +928,63 @@ func (e *Emitter) emitAppInsn(node *ast.Apply) *ir.Instr {
 	if !ok {
 		panic("APPLY not to func type: " + ref.Symbol.Name)
 	}
-
-	args := make([]string, len(node.Args))
-	argTps := make([]types.ValType, len(node.Args))
-	boxes := make([]types.ValType, len(node.Args)+1)
-	for i, arg := range node.Args {
-		arg := e.emitInsn(arg)
-		args[i] = arg.Ident
-		if types.HasTpVar(tFun.Params[i]) {
-			boxes[i] = tFun.Params[i]
-		}
-		argTp := e.env.GetDefTrusted(arg.Ident)
-		argTps[i] = argTp
-	}
-	if types.HasTpVar(tFun.Ret) {
-		boxes[len(boxes)-1] = tFun.Ret
-	}
-
 	var tpArgs []types.ValType
 	for _, tpArg := range node.TpArgs {
 		tpArgs = append(tpArgs, e.emitType(tpArg))
+	}
+
+	return e.emitCall(tFun, ref.Symbol.Name, node.Args, tpArgs)
+}
+
+func (e *Emitter) emitCall(tFun *types.Func, fname string, argNodes []ast.Expr, tpArgs []types.ValType) *ir.Instr {
+	if len(argNodes) != len(tFun.Params) {
+		panic(errors.NewError(errors.TYPE_PARAM_COUNT_WRONG, "call arg count not aligned"))
+	}
+
+	args := make([]string, len(argNodes))
+	argTps := make([]types.ValType, len(argNodes))
+	boxes := make([]*ir.Box, len(argNodes))
+	for i, arg := range argNodes {
+		arg := e.emitInsn(arg)
+		args[i] = arg.Ident
+		argTp := e.env.GetDefTrusted(arg.Ident)
+		argTps[i] = argTp
+		paramTp := tFun.Params[i]
+		if paramTp.Code() == types.TpTrait {
+			right := e.emitBoxTrait(args[i], paramTp.(*types.Trait))
+			args[i] = right.Ident
+		} else if types.HasTpVar(paramTp) {
+			right, b := e.emitBox(args[i], nil, paramTp)
+			args[i] = right.Ident
+			boxes[i] = b
+		}
+	}
+	var boxRet types.ValType
+	if types.HasTpVar(tFun.Ret) {
+		boxRet = tFun.Ret
 	}
 
 	tFun, err := types.TypeCheckApp(tFun, tpArgs, argTps)
 	if err != nil {
 		panic(err)
 	}
-
-	val := &ir.Call{
-		Name:  ref.Symbol.Name,
-		Tp:    tFun.Ret,
-		Args:  args,
-		Boxes: boxes,
+	for i, box := range boxes {
+		if box != nil {
+			box.Tp = tFun.Params[i]
+		}
 	}
 
-	return e.rvalInstr(val)
+	val := &ir.StaticCall{
+		Name: fname,
+		Tp:   tFun.Ret,
+		Args: args,
+	}
+
+	fir := e.rvalInstr(val)
+	if boxRet != nil {
+		fir = e.emitUnbox(fir.Ident, tFun.Ret, boxRet)
+	}
+	return fir
 }
 
 func (e *Emitter) rvalInstr(val ir.Val) *ir.Instr {
@@ -881,6 +1076,9 @@ func (e *Emitter) emitType(node ast.Expr) types.ValType {
 			}
 			types.TpUidCounter++
 			return &types.Rec{
+				ImplBundle: types.ImplBundle{
+					Fns: map[string]*types.Func{},
+				},
 				Uid:    types.TpUidCounter,
 				Keys:   keys,
 				MemTps: memTps,
@@ -899,6 +1097,9 @@ func (e *Emitter) emitType(node ast.Expr) types.ValType {
 			}
 			types.TpUidCounter++
 			return &types.Rec{
+				ImplBundle: types.ImplBundle{
+					Fns: map[string]*types.Func{},
+				},
 				Uid:    types.TpUidCounter,
 				Keys:   keys,
 				MemTps: memTps,
@@ -943,6 +1144,50 @@ func (e *Emitter) emitType(node ast.Expr) types.ValType {
 				TpVars: typeVars,
 				Tps:    tps,
 			}
+		case "trait":
+			var keys []string
+			var fns []*types.Func
+			var tpVars []*types.TypeVar
+			tpVarSet := map[string]*types.TypeVar{}
+			types.TpUidCounter++
+			trait := &types.Trait{
+				Uid: types.TpUidCounter,
+			}
+			for _, tpParam := range n.TpParams {
+				tpVar := &types.TypeVar{Name: tpParam.Name}
+				tpVars = append(tpVars, tpVar)
+				tpVarSet[tpVar.Name] = tpVar
+			}
+			for _, p := range n.ParamTypes {
+				ft := p.(ast.Param)
+				keys = append(keys, ft.Ident.Name)
+				fnTp := ft.Type.(*ast.FuncType)
+				paramTps := []types.ValType{trait}
+				for _, param := range fnTp.Params {
+					paramTp := e.emitType(param.Type)
+					paramTps = append(paramTps, paramTp)
+				}
+				types.TpUidCounter++
+				funTp := &types.Func{
+					Uid:    types.TpUidCounter,
+					Params: paramTps,
+					Ret:    e.emitType(fnTp.RetType),
+				}
+				fnTpVars := types.CollectTpVar(funTp)
+				for _, ftv := range fnTpVars {
+					if _, ok := tpVarSet[ftv.Name]; !ok {
+						panic(errors.NewError(errors.TYPE_TRAIT_TYPE_VAR_UNDEFINED, "undefined type parameter"))
+					}
+					funTp.TpVars = append(funTp.TpVars, ftv)
+				}
+
+				fns = append(fns, funTp)
+			}
+			trait.Keys = keys
+			trait.Fns = fns
+			trait.TpVars = tpVars
+
+			return trait
 		default:
 			if t, ok := e.env.Types[n.Ctor.Name]; ok {
 				var tpArgs []types.ValType

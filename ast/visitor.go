@@ -144,11 +144,6 @@ func Visit(vis Visitor, e Expr) {
 		for _, e := range n.Elems {
 			Visit(v, e)
 		}
-	case *FuncType:
-		for _, e := range n.ParamTypes {
-			Visit(v, e)
-		}
-		Visit(v, n.RetType)
 	case *TupleType:
 		for _, e := range n.ElemTypes {
 			Visit(v, e)

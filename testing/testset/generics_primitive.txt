@@ -1,6 +1,12 @@
 //@anon int(10)
-type person = rec{age:int};
 fun f_g[T](a:T): T = {
     a
 };
 f_g[int](10)
+$$
+
+//@anon float(10.1)
+fun f_g[T](a:T): T = {
+    a
+};
+f_g[float](10.1)
