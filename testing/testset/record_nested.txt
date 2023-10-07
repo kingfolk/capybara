@@ -1,0 +1,10 @@
+//@val int(10)
+type person = rec{age:int};
+type family = rec{son:person};
+
+fun f1(): int = {
+    let b = person{age:10};
+    let c = family{son:b};
+    c.son.age
+}
+$$

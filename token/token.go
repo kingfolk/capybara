@@ -42,6 +42,7 @@ const (
 	IN
 	REC
 	TUP
+	TRAIT
 	ENUM
 	COMMA
 	ARRAY
@@ -104,6 +105,7 @@ var tokenTable = [...]string{
 	LET:            "let",
 	IN:             "in",
 	REC:            "rec",
+	TRAIT:          "trait",
 	TUP:            "tup",
 	ENUM:           "enum",
 	COMMA:          ",",

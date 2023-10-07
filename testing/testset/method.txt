@@ -1,0 +1,11 @@
+//@anon int(11)
+type person = rec{age:int};
+fun (p person) incre(): int = {
+    p.age + 1
+};
+
+fun f1(): int = {
+    let b = person{age:10};
+    b.incre()
+}; f1()
+$$

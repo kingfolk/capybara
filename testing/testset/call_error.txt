@@ -5,3 +5,8 @@ fun f_g1[T](): person[T] = {
 };
 let a = f_g1[int](10);
 a.age
+$$
+
+//@anon error(TYPE_INCOMPATIBLE_RECORD)
+type person = rec{age:int};
+fun f1(p:person): int = {p.age + 2}; f1(1)

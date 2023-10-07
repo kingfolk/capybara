@@ -94,6 +94,8 @@ func (l *Lexer) emitIdent(ident string) {
 		l.emit(token.REC)
 	case "tup":
 		l.emit(token.TUP)
+	case "trait":
+		l.emit(token.TRAIT)
 	case "enum":
 		l.emit(token.ENUM)
 	case "not":

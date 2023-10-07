@@ -1,0 +1,12 @@
+//@anon error(TYPE_TRAIT_TYPE_VAR_UNDEFINED)
+type person = rec{age:int};
+type counter = trait[T]{
+    add(a:P): P
+};
+
+fun f_trait(): int = {
+    1
+};
+
+f_trait()
+$$

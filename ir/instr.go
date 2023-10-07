@@ -95,11 +95,23 @@ type (
 		Defs        map[string]types.ValType
 	}
 
-	Call struct {
+	Ret struct {
+		Tp     types.ValType
+		Target string
+	}
+
+	StaticCall struct {
+		Name string
+		Tp   types.ValType
+		Args []string
+		// Boxes []types.ValType
+	}
+
+	TraitCall struct {
 		Name  string
+		Trait *types.Trait
 		Tp    types.ValType
 		Args  []string
-		Boxes []types.ValType
 	}
 
 	Phi struct {
@@ -146,13 +158,25 @@ type (
 		Box string
 	}
 
-	Discriminant struct {
-		Simple bool
+	Box struct {
+		Tp     types.ValType
+		BoxTp  types.ValType
+		Target string
+	}
+
+	BoxTrait struct {
+		Tp     *types.Trait
 		Target string
 	}
 
 	Unbox struct {
 		Tp     types.ValType
+		BoxTp  types.ValType
+		Target string
+	}
+
+	Discriminant struct {
+		Simple bool
 		Target string
 	}
 )
@@ -295,16 +319,28 @@ func (e *If) String() string {
 	return "If " + e.Cond + " Then " + thenBB + " Else " + elseBB
 }
 
-func (e *Call) Kind() int {
+func (e *StaticCall) Kind() int {
 	return CallKind
 }
 
-func (e *Call) Type() types.ValType {
+func (e *StaticCall) Type() types.ValType {
 	return e.Tp
 }
 
-func (e *Call) String() string {
+func (e *StaticCall) String() string {
 	return e.Name + "(" + strings.Join(e.Args, ", ") + ") "
+}
+
+func (e *TraitCall) Kind() int {
+	return CallKind
+}
+
+func (e *TraitCall) Type() types.ValType {
+	return e.Tp
+}
+
+func (e *TraitCall) String() string {
+	return "TraitCall" + "(" + e.Name + "," + strings.Join(e.Args, ", ") + ") "
 }
 
 func (e *ArrLit) Kind() int {
@@ -398,6 +434,30 @@ func (e *Discriminant) String() string {
 	return "Discriminant(" + e.Target + ")"
 }
 
+func (e *Box) Kind() int {
+	return CallKind
+}
+
+func (e *Box) Type() types.ValType {
+	return e.Tp
+}
+
+func (e *Box) String() string {
+	return "Box(" + e.Target + ")"
+}
+
+func (e *BoxTrait) Kind() int {
+	return CallKind
+}
+
+func (e *BoxTrait) Type() types.ValType {
+	return e.Tp
+}
+
+func (e *BoxTrait) String() string {
+	return "BoxTrait(" + e.Target + ")"
+}
+
 func (e *Unbox) Kind() int {
 	return CallKind
 }
@@ -420,6 +480,18 @@ func (e *Func) Type() types.ValType {
 
 func (e *Func) String() string {
 	return e.Body.Name + "(" + strings.Join(e.Params, ",") + ")"
+}
+
+func (e *Ret) Kind() int {
+	return RValKind
+}
+
+func (e *Ret) Type() types.ValType {
+	return e.Tp
+}
+
+func (e *Ret) String() string {
+	return "Return " + e.Target
 }
 
 func (e *Phi) Kind() int {

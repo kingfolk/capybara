@@ -94,17 +94,11 @@ func (p Param) End() locerr.Pos {
 	return p.Type.End()
 }
 
-type NamedArg struct {
-	Ident *Symbol
-	Arg   Expr
-}
-
 type FuncDef struct {
-	Symbol   *Symbol
-	Params   []Param
-	TpParams []*Symbol
-	Body     []Expr
-	RetType  Expr
+	FuncType
+	Symbol *Symbol
+	Rcv    *Param
+	Body   []Expr
 }
 
 func (d *FuncDef) ParamSymbols() []*Symbol {
@@ -113,6 +107,13 @@ func (d *FuncDef) ParamSymbols() []*Symbol {
 		syms = append(syms, p.Ident)
 	}
 	return syms
+}
+
+type FuncType struct {
+	Token    *token.Token
+	Params   []Param
+	TpParams []*Symbol
+	RetType  Expr
 }
 
 // AST node which meets Expr interface
@@ -304,7 +305,7 @@ type (
 	RecLit struct {
 		Ref    *VarRef
 		TpArgs []Expr
-		Args   []NamedArg
+		Args   []Param
 	}
 
 	DotAcs struct {
@@ -330,11 +331,6 @@ type (
 		StartToken *token.Token
 		EndToken   *token.Token
 		Elems      []Expr
-	}
-
-	FuncType struct {
-		ParamTypes []Expr
-		RetType    Expr
 	}
 
 	TupleType struct {
@@ -648,7 +644,7 @@ func (e *RecLit) Pos() locerr.Pos {
 
 func (e *RecLit) End() locerr.Pos {
 	last := e.Args[len(e.Args)-1]
-	return last.Arg.End()
+	return last.Type.End()
 }
 
 func (e *DotAcs) Pos() locerr.Pos {
@@ -680,13 +676,6 @@ func (e *ArrayLit) End() locerr.Pos {
 	return e.EndToken.End
 }
 
-func (e *FuncType) Pos() locerr.Pos {
-	return e.ParamTypes[0].Pos()
-}
-func (e *FuncType) End() locerr.Pos {
-	return e.RetType.End()
-}
-
 func (e *TupleType) Pos() locerr.Pos {
 	return e.ElemTypes[0].Pos()
 }
@@ -709,6 +698,13 @@ func (e *CtorType) Pos() locerr.Pos {
 }
 func (e *CtorType) End() locerr.Pos {
 	return e.EndToken.End
+}
+
+func (e *FuncType) Pos() locerr.Pos {
+	return e.Token.Start
+}
+func (e *FuncType) End() locerr.Pos {
+	return e.RetType.End()
 }
 
 func (e *Typed) Pos() locerr.Pos {
@@ -788,7 +784,6 @@ func (e *DotAcs) Name() string       { return "DotAcs" }
 func (e *Match) Name() string        { return fmt.Sprintf("Match (%s)", e.Target.Name()) }
 func (e *Case) Name() string         { return fmt.Sprintf("Case (%s)", e.Cond.Name()) }
 func (e *ArrayLit) Name() string     { return fmt.Sprintf("ArrayLit (%d)", len(e.Elems)) }
-func (e *FuncType) Name() string     { return "FuncType" }
 func (e *TupleType) Name() string    { return fmt.Sprintf("TupleType (%d)", len(e.ElemTypes)) }
 func (e *CtorType) Name() string {
 	len := len(e.ParamTypes)
@@ -797,6 +792,7 @@ func (e *CtorType) Name() string {
 	}
 	return fmt.Sprintf("CtorType (%s (%d))", e.Ctor.Name, len)
 }
+func (e *FuncType) Name() string { return "FuncType" }
 func (e *Typed) Name() string    { return "Typed" }
 func (e *TypeDecl) Name() string { return fmt.Sprintf("TypeDecl (%s)", e.Ident.Name) }
 func (e *External) Name() string { return fmt.Sprintf("External (%s => %s)", e.Ident.Name, e.C) }

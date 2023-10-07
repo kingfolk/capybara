@@ -1,0 +1,90 @@
+//@anon error(TYPE_INCOMPATIBLE_TRAIT)
+type person1 = rec{age:int};
+type counter = trait{
+    incre(a:int): int
+};
+
+fun f_trait2(): int = {
+    let c:counter;
+    c = person1{age:10};
+    c.incre(1)
+}; 
+
+f_trait2()
+$$
+
+//@anon error(TYPE_INCOMPATIBLE_TRAIT)
+type person1 = rec{age:int};
+type counter = trait{
+    incre(a:int): int
+};
+
+fun (p person1) incre1(a:int): int = {
+    p.age + a + 1
+};
+
+fun f_trait2(): int = {
+    let c:counter;
+    c = person1{age:10};
+    c.incre(1)
+}; 
+
+f_trait2()
+$$
+
+//@anon error(TYPE_INCOMPATIBLE_TRAIT)
+type person1 = rec{age:int};
+type counter = trait{
+    incre(a:int): int
+};
+
+fun (p person1) incre(a:int,a1:int): int = {
+    p.age + a + 1
+};
+
+fun f_trait2(): int = {
+    let c:counter;
+    c = person1{age:10};
+    c.incre(1)
+}; 
+
+f_trait2()
+$$
+
+//@anon error(TYPE_TRAIT_ACS_ILLEGAL)
+type person1 = rec{age:int};
+type counter = trait{
+    incre(a:int): int
+};
+
+fun (p person1) incre(a:int): int = {
+    p.age + a + 1
+};
+
+fun f_trait2(): int = {
+    let c:counter;
+    c = person1{age:10};
+    c.incre1(1)
+}; 
+
+f_trait2()
+$$
+
+//@anon error(TYPE_PARAM_COUNT_WRONG)
+type person1 = rec{age:int};
+type counter = trait{
+    incre(a:int): int
+};
+
+fun (p person1) incre(a:int): int = {
+    p.age + a + 1
+};
+
+fun f_trait5(): int = {
+    let c:counter;
+    c = person1{age:10};
+    c.incre(1,2)
+}; 
+
+f_trait5()
+$$

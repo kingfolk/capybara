@@ -50,6 +50,8 @@ func RunTest(t *testing.T, debug bool, file string) {
 		panic(err)
 	}
 
+	codegen.Reset()
+
 	raw, setupPairs := parseSetupSection(t, string(dat))
 	for _, global := range setupPairs {
 		v := llvm.AddGlobal(codegen.GetRootModule(), global.EleTp, global.Name)
@@ -98,7 +100,11 @@ func RunCase(t *testing.T, debug bool, frame *AssertFrame, setupPairs []*codegen
 		if !ok {
 			assert.Fail(t, "emit error is not LangError: "+emitErr.Error())
 		}
-		assert.Equal(t, frame.result.outerr, er.Code, "assert error fail. err: "+emitErr.Error())
+		if frame.result.outerr == 0 {
+			assert.Fail(t, "got unexpected error: "+emitErr.Error())
+		} else {
+			assert.Equal(t, frame.result.outerr, er.Code, "assert error fail. err: "+emitErr.Error())
+		}
 		return
 	}
 
@@ -106,6 +112,7 @@ func RunCase(t *testing.T, debug bool, frame *AssertFrame, setupPairs []*codegen
 	actualBb += ir.CFGString(mod.Root)
 	for _, fn := range mod.Funcs {
 		actualBb += ir.CFGFuncString(fn)
+		actualBb += "\n"
 	}
 
 	var assertResult = func(jitFn llvm.Value) {
@@ -117,6 +124,12 @@ func RunCase(t *testing.T, debug bool, frame *AssertFrame, setupPairs []*codegen
 					panic(err)
 				}
 				return llvm.NewGenericValueFromInt(llvm.Int32Type(), uint64(v), true)
+			case types.Float:
+				v, err := strconv.ParseFloat(string(r.Raw()), 64)
+				if err != nil {
+					panic(err)
+				}
+				return llvm.NewGenericValueFromFloat(llvm.FloatType(), v)
 			default:
 				panic("unsupported type: " + r.Type().String())
 			}
@@ -132,17 +145,19 @@ func RunCase(t *testing.T, debug bool, frame *AssertFrame, setupPairs []*codegen
 			switch frame.result.output.Type() {
 			case types.Int:
 				assert.Equal(t, int64(expected.Int(true)), int64(res.Int(true)))
+			case types.Float:
+				assert.Equal(t, int64(expected.Float(llvm.FloatType())), int64(res.Float(llvm.FloatType())))
 			default:
 				panic("unsupported type: " + frame.result.output.Type().String())
 			}
 		} else {
-			panic("unreachable")
+			panic("something wrong. error or result assert fail")
 		}
 	}
 
 	switch frame.token {
 	case AssertTokenBB:
-		ok := assert.Equal(t, strings.TrimSpace(frame.value), actualBb)
+		ok := assert.Equal(t, strings.TrimSpace(frame.value), strings.TrimSpace(actualBb))
 		if !ok {
 			fmt.Println("--- actual bb ---")
 			fmt.Println(actualBb)
