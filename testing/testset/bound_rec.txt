@@ -1,0 +1,23 @@
+//@anon int(101)
+type counter = trait{
+    incre(): int
+};
+type person = rec{
+    age:int
+};
+type handler = rec[T:counter]{
+    h:T
+};
+
+fun (p person) incre(): int = {
+    p.age + 1
+};
+
+fun f_trait(): int = {
+    let b = person{age:100};
+    let c = handler[person]{h:b};
+    c.h.incre()
+};
+
+f_trait()
+$$

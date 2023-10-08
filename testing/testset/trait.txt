@@ -23,7 +23,7 @@ f_trait1($v1){
   {
     $v2 = $v1
     $v3 = $v1
-    $v4 = TraitCall(incre,$v3) 
+    $v4 = TraitCall(incre, $v3) 
     $v5 = Return $v4
   }
 }

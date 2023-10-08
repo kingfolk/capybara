@@ -1,0 +1,16 @@
+//@anon error(TYPE_BOUND_LOWER_TRAIT)
+type person = rec{age:int};
+type t1 = trait[T:person]{
+    incre(a:T): int
+};
+
+fun (p person) add(a:int): int = {
+    p.age + a + 1
+};
+
+fun f_trait1(): int = {
+    111
+};
+
+f_trait1()
+$$

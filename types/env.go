@@ -78,7 +78,8 @@ type (
 
 	TypeVar struct {
 		VoidImplBundle
-		Name string
+		Name  string
+		Lower ValType
 	}
 
 	App struct {
@@ -309,7 +310,11 @@ func (t *Func) Code() int {
 }
 
 func (t *TypeVar) String() string {
-	return "'" + t.Name
+	str := "'" + t.Name
+	if t.Lower == nil {
+		return str
+	}
+	return str + "<:" + t.Lower.String()
 }
 
 func (t *TypeVar) Code() int {

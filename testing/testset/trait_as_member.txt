@@ -1,0 +1,59 @@
+/*@bb
+#bb0:$root$
+{
+  $v1 = person$incre($v1)
+  $v2 = f_trait()
+  $v3 = f_trait() 
+  $v4 = Return $v3
+}
+
+person$incre($v1){
+  #bb0:person$incre
+  {
+    $v2 = $v1
+    $v3 = $v2.0
+    $v4 = 1
+    $v5 = $v3+$v4
+    $v6 = Return $v5
+  }
+}
+f_trait(){
+  #bb0:f_trait
+  {
+    $v1 = 100
+    $v2 = Rec<int>($v1) 
+    $v3 = $v2
+    $v4 = BoxTrait($v3)
+    $v5 = Rec<trait{incre}>($v4) 
+    $v6 = $v5
+    $v7 = $v6.0
+    $v8 = $v5
+    $v9 = $v8.0
+    $v10 = TraitCall(incre, $v9) 
+    $v11 = Return $v10
+  }
+}
+*/
+//@anon int(101)
+type counter = trait{
+    incre(): int
+};
+type person = rec{
+    age:int
+};
+type handler = rec{
+    h:counter
+};
+
+fun (p person) incre(): int = {
+    p.age + 1
+};
+
+fun f_trait(): int = {
+    let b = person{age:100};
+    let c = handler{h:b};
+    c.h.incre()
+};
+
+f_trait()
+$$

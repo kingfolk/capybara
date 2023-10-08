@@ -398,9 +398,13 @@ func (b *blockBuilder) boxRec(v llvm.Value, tp, boxedTp types.ValType) llvm.Valu
 		unboxedTp := tp.(*types.Rec).MemTps[i]
 		ele := b.buildRecLoad(v, i)
 		var arg llvm.Value
-		switch t.(type) {
+		switch tt := t.(type) {
 		case *types.TypeVar:
-			arg = b.boxWhole(ele, unboxedTp)
+			if tt.Lower != nil {
+				arg = b.boxTrait("form boxrec", tt.Lower.(*types.Trait), ele, unboxedTp)
+			} else {
+				arg = b.boxWhole(ele, unboxedTp)
+			}
 		case *types.Rec:
 			arg = b.boxRec(ele, unboxedTp, t)
 		default:
@@ -414,6 +418,10 @@ func (b *blockBuilder) boxRec(v llvm.Value, tp, boxedTp types.ValType) llvm.Valu
 func (b *blockBuilder) buildUnbox(ident string, ub *ir.Unbox) llvm.Value {
 	v := b.resolve(ub.Target)
 	if ub.BoxTp.Code() == types.TpVar {
+		// unboxTrait occurs only for trait lower bound, which is box to trait at first, need to unbox trait operation
+		if t, ok := ub.BoxTp.(*types.TypeVar); ok && t.Lower != nil && t.Lower.Code() == types.TpTrait {
+			return b.unboxTrait(v, ub.Tp)
+		}
 		return b.unboxWhole(v, ub.Tp)
 	}
 	return b.unboxRec(v, ub.Tp, ub.BoxTp)
@@ -437,6 +445,11 @@ func (b *blockBuilder) unboxWhole(v llvm.Value, tp types.ValType) llvm.Value {
 	default:
 		return v
 	}
+}
+
+func (b *blockBuilder) unboxTrait(v llvm.Value, tp types.ValType) llvm.Value {
+	vv := b.buildRecLoad(v, 0)
+	return b.unboxWhole(vv, tp)
 }
 
 func (b *blockBuilder) unboxRec(v llvm.Value, tp, boxedTp types.ValType) llvm.Value {
@@ -470,14 +483,19 @@ func (b *blockBuilder) unboxRec(v llvm.Value, tp, boxedTp types.ValType) llvm.Va
 }
 
 func (b *blockBuilder) buildBoxTrait(ident string, tb *ir.BoxTrait) llvm.Value {
-	origTp := b.typeOf(tb.Target)
-	imp := origTp.Impls()
+	targetTp := b.typeOf(tb.Target)
+	target := b.resolve(tb.Target)
+	return b.boxTrait(ident, tb.Tp, target, targetTp)
+}
 
-	tp := b.buildType(tb.Tp)
+func (b *blockBuilder) boxTrait(ident string, tt *types.Trait, target llvm.Value, targetTp types.ValType) llvm.Value {
+	imp := targetTp.Impls()
+
+	tp := b.buildType(tt)
 	alloca := b.builder.CreateAlloca(tp, ident)
 
 	fnPart := b.builder.CreateStructGEP(alloca, 1, "rec")
-	for i, k := range tb.Tp.Keys {
+	for i, k := range tt.Keys {
 		_, ok := imp.Fns[k]
 		if !ok {
 			panic("unreachable. impl fn not found: " + k)
@@ -493,8 +511,6 @@ func (b *blockBuilder) buildBoxTrait(ident string, tb *ir.BoxTrait) llvm.Value {
 		b.buildRecStore(fnPart, f, i)
 	}
 
-	targetTp := b.typeOf(tb.Target)
-	target := b.resolve(tb.Target)
 	target = b.boxWhole(target, targetTp)
 	b.buildRecStore(alloca, target, 0)
 	return alloca
@@ -590,6 +606,9 @@ func (b *blockBuilder) buildTypePtr(tp types.ValType) llvm.Type {
 	if tp.Code() == types.TpRec || tp.Code() == types.TpArr || tp.Code() == types.TpTrait {
 		return llvm.PointerType(b.buildType(tp), 0)
 	}
+	if t, ok := tp.(*types.TypeVar); ok && t.Lower != nil {
+		return b.buildTypePtr(t.Lower)
+	}
 	return b.buildType(tp)
 }
 
@@ -606,6 +625,9 @@ func (b *blockBuilder) buildType(tp types.ValType) llvm.Type {
 	case types.TpVoidPtr:
 		return voidPtrT
 	case types.TpVar:
+		if tp.(*types.TypeVar).Lower != nil {
+			return b.buildType(tp.(*types.TypeVar).Lower)
+		}
 		return voidPtrT
 	case types.TpArr:
 		arrTp := tp.(*types.Arr)
@@ -618,7 +640,7 @@ func (b *blockBuilder) buildType(tp types.ValType) llvm.Type {
 		tps := []llvm.Type{}
 		for _, tp := range recTp.MemTps {
 			memTp := b.buildType(tp)
-			if tp.Code() == types.TpRec {
+			if tp.Code() == types.TpRec || tp.Code() == types.TpTrait || (tp.Code() == types.TpVar && tp.(*types.TypeVar).Lower != nil) {
 				memTp = llvm.PointerType(memTp, 0)
 			}
 			tps = append(tps, memTp)

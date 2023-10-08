@@ -111,8 +111,8 @@ func (d *FuncDef) ParamSymbols() []*Symbol {
 
 type FuncType struct {
 	Token    *token.Token
-	Params   []Param
-	TpParams []*Symbol
+	Params   []*Param
+	TpParams []*Param
 	RetType  Expr
 }
 
@@ -305,7 +305,7 @@ type (
 	RecLit struct {
 		Ref    *VarRef
 		TpArgs []Expr
-		Args   []Param
+		Args   []*Param
 	}
 
 	DotAcs struct {
@@ -342,7 +342,7 @@ type (
 		StartToken *token.Token // Maybe nil
 		EndToken   *token.Token
 		ParamTypes []Expr
-		TpParams   []*Symbol
+		TpParams   []*Param
 		Ctor       *Symbol
 	}
 

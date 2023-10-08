@@ -38,6 +38,6 @@ func TestCompileAndRunAll(t *testing.T) {
 }
 
 func TestCompileAndRunOne(t *testing.T) {
-	filename := "./testset/trait.txt"
+	filename := "./testset/bound_decl_error.txt"
 	RunTest(t, true, filename)
 }
