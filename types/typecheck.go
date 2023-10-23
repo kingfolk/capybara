@@ -83,14 +83,22 @@ func TypeCompatible(t1, t2 ValType) error {
 		if t1.Code() == t2.Code() && t1.(*Trait).Uid == t2.(*Trait).Uid {
 			return nil
 		}
-		impl := t2.Impls()
+		var impls map[string]*Func
+		if t2.Code() == TpTrait {
+			impls = map[string]*Func{}
+			for i, k := range t2.(*Trait).Keys {
+				impls[k] = t2.(*Trait).Fns[i]
+			}
+		} else {
+			impls = t2.Impls().Fns
+		}
 		tt := t1.(*Trait)
-		if len(impl.Fns) != len(tt.Fns) {
+		if len(impls) < len(tt.Fns) {
 			return errors.NewError(errors.TYPE_INCOMPATIBLE_TRAIT, "trait "+t1.String()+" and "+t2.String()+" not compatible")
 		}
 		for i, k := range tt.Keys {
 			traitFn := tt.Fns[i]
-			rightFn, ok := impl.Fns[k]
+			rightFn, ok := impls[k]
 			if !ok {
 				return errors.NewError(errors.TYPE_INCOMPATIBLE_TRAIT, "trait "+t1.String()+" and "+t2.String()+" not compatible. missing fun: "+k)
 			}
@@ -224,21 +232,10 @@ func SubstRoot(t ValType, tpArgs []ValType) (ValType, error) {
 		set[tpVars[i].Name] = tpArg
 	}
 
-	return Subst(t, set), nil
+	return Subst(t, set)
 }
 
-func SubstImplBundle(ib *ImplBundle, set map[string]ValType) ImplBundle {
-	fns := map[string]*Func{}
-	for k, fn := range ib.Fns {
-		fns[k] = Subst(fn, set).(*Func)
-	}
-	return ImplBundle{
-		Prefix: ib.Prefix,
-		Fns:    fns,
-	}
-}
-
-func Subst(t ValType, set map[string]ValType) ValType {
+func Subst(t ValType, set map[string]ValType) (ValType, error) {
 	if set == nil {
 		set = map[string]ValType{}
 	}
@@ -246,15 +243,28 @@ func Subst(t ValType, set map[string]ValType) ValType {
 	case *TypeVar:
 		s, ok := set[tp.Name]
 		if ok {
-			return s
+			if tp.Lower != nil {
+				if err := TypeCompatible(tp.Lower, s); err != nil {
+					return nil, err
+				}
+			}
+			return s, nil
 		}
-		return t
+		return t, nil
 	case *Func:
+		ret, err := Subst(tp.Ret, set)
+		if err != nil {
+			return nil, err
+		}
+		tps, err := SubstList(tp.Params, set)
+		if err != nil {
+			return nil, err
+		}
 		return &Func{
 			Uid:    tp.Uid,
-			Ret:    Subst(tp.Ret, set),
-			Params: SubstList(tp.Params, set),
-		}
+			Ret:    ret,
+			Params: tps,
+		}, nil
 	case *Rec:
 		var substs []ValType
 		var tpVars []*TypeVar
@@ -267,28 +277,44 @@ func Subst(t ValType, set map[string]ValType) ValType {
 				tpVars = append(tpVars, tv)
 			}
 		}
+		tps, err := SubstList(tp.MemTps, set)
+		if err != nil {
+			return nil, err
+		}
 		tr := &Rec{
 			ImplBundle: tp.ImplBundle,
 			Uid:        tp.Uid,
 			Keys:       tp.Keys,
-			MemTps:     SubstList(tp.MemTps, set),
+			MemTps:     tps,
 			TpVars:     tpVars,
 			Substs:     substs,
 		}
-		return tr
+		return tr, nil
 	case *Enum:
+		tps, err := SubstList(tp.Tps, set)
+		if err != nil {
+			return nil, err
+		}
 		return &Enum{
 			ImplBundle: tp.ImplBundle,
 			Uid:        tp.Uid,
 			Simple:     tp.Simple,
 			Tokens:     tp.Tokens,
 			TpVars:     tp.TpVars,
-			Tps:        SubstList(tp.Tps, set),
-		}
+			Tps:        tps,
+		}, nil
 	case *Trait:
 		var tpVars []*TypeVar
 		for _, tv := range tp.TpVars {
 			subst := set[tv.Name]
+			if subst == nil {
+				panic("todo")
+			}
+			if tv.Lower != nil {
+				if err := TypeCompatible(tv.Lower, subst); err != nil {
+					return nil, err
+				}
+			}
 			if subst.Code() == TpVar {
 				tpVars = append(tpVars, subst.(*TypeVar))
 			} else {
@@ -302,23 +328,35 @@ func Subst(t ValType, set map[string]ValType) ValType {
 		}
 		var fns []*Func
 		for _, fn := range tp.Fns {
+			ret, err := Subst(fn.Ret, set)
+			if err != nil {
+				return nil, err
+			}
+			ps, err := SubstList(fn.Params[1:], set)
+			if err != nil {
+				return nil, err
+			}
 			fn = &Func{
 				Uid:    fn.Uid,
-				Ret:    Subst(fn.Ret, set),
-				Params: append([]ValType{trait}, SubstList(fn.Params[1:], set)...),
+				Ret:    ret,
+				Params: append([]ValType{trait}, ps...),
 			}
 			fns = append(fns, fn)
 		}
 		trait.Fns = fns
-		return trait
+		return trait, nil
 	}
-	return t
+	return t, nil
 }
 
-func SubstList(ts []ValType, set map[string]ValType) []ValType {
+func SubstList(ts []ValType, set map[string]ValType) ([]ValType, error) {
 	res := make([]ValType, len(ts))
+	var err error
 	for i, t := range ts {
-		res[i] = Subst(t, set)
+		res[i], err = Subst(t, set)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return res
+	return res, nil
 }

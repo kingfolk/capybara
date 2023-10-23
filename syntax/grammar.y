@@ -20,7 +20,7 @@ import (
 	token *token.Token
 	decls []*ast.Symbol
 	decl *ast.Symbol
-	params []ast.Param
+	params []*ast.Param
 	param *ast.Param
 	program *ast.AST
 }
@@ -125,9 +125,11 @@ import (
 %type<params> func_params
 %type<params> opt_params
 %type<decls> id_list
-%type<decls> opt_type_params
+%type<params> opt_type_params
 %type<params> named_args
 %type<node> simple_type_annotation
+%type<param> tpvar
+%type<params> tpvar_list
 %type<node> type
 %type<nodes> seq_type
 %type<node> trait_fun
@@ -399,15 +401,15 @@ opt_params:
 
 params:
 	IDENT COLON type
-		{ $$ = []ast.Param{ast.Param{$1, sym($1), $3}} }
+		{ $$ = []*ast.Param{&ast.Param{$1, sym($1), $3}} }
 	| opt_params COMMA IDENT COLON type
-		{ $$ = append($1, ast.Param{$3, sym($3), $5}) }
+		{ $$ = append($1, &ast.Param{$3, sym($3), $5}) }
 
 named_args:
 	IDENT COLON exp
-		{ $$ = []ast.Param{ast.Param{$1, sym($1), $3}} }
+		{ $$ = []*ast.Param{&ast.Param{$1, sym($1), $3}} }
 	| named_args COMMA IDENT COLON exp
-		{ $$ = append($1, ast.Param{$3, sym($3), $5}) }
+		{ $$ = append($1, &ast.Param{$3, sym($3), $5}) }
 
 args:
 		{ $$ = []ast.Expr{} }
@@ -513,7 +515,7 @@ seq_trait_fun:
 
 opt_type_params:
 		{ $$ = nil }
-	| LBRACKET id_list RBRACKET
+	| LBRACKET tpvar_list RBRACKET
 		{ $$ = $2 }
 
 opt_fun_receiver:
@@ -533,6 +535,27 @@ opt_fun_receiver:
 				yylex.Error("illegal trait access. trait func call syntax error")
 			}
 			$$ = &ast.Param{$1, sym($2), tp}
+		}
+
+tpvar_list:
+	tpvar
+		{
+			$$ = []*ast.Param{$1}
+		}
+	| tpvar_list COMMA tpvar
+		{
+			$$ = append($1, $3)
+		}
+
+tpvar:
+	IDENT
+		{
+			$$ = &ast.Param{$1, sym($1), nil}
+		}
+	| IDENT COLON IDENT
+		{
+			id := &ast.VarRef{$3, ast.NewSymbol($3.Value())}
+			$$ = &ast.Param{$1, sym($1), id}
 		}
 
 id_list:

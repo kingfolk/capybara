@@ -1,0 +1,54 @@
+//@anon int(101)
+type person = rec{age:int};
+type counter = trait{
+    incre(): int
+};
+type timer = trait{
+    incre(): int
+    second(): int
+};
+
+fun (p person) incre(): int = {
+    p.age + 1
+};
+fun (p person) second(): int = {
+    10
+};
+
+fun f_trait(): int = {
+    let t:timer;
+    t = person{age:100};
+    let c:counter;
+    c = t;
+    c.incre()
+};
+
+f_trait()
+$$
+
+//@anon error(TYPE_INCOMPATIBLE_TRAIT)
+type person = rec{age:int};
+type counter = trait{
+    incre(): int
+};
+type timer = trait{
+    incre(): int
+    second(): int
+};
+
+fun (p person) incre(): int = {
+    p.age + 1
+};
+fun (p person) second(): int = {
+    10
+};
+
+fun f_trait(): int = {
+    let c:counter;
+    c = person{age:100};
+    let t:timer;
+    t = c;
+    c.incre()
+};
+
+f_trait()

@@ -1,0 +1,21 @@
+//@anon error(TYPE_INCOMPATIBLE_TRAIT)
+type person = rec{age:int};
+type counter = trait{
+    add(a:int): int
+};
+type t1 = trait[T:counter]{
+    incre(a:T): int
+};
+
+fun (p person) add1(a:int): int = {
+    p.age + a + 1
+};
+
+fun f_trait(): int = {
+    let b = person{age:100};
+    let c:t1[person];
+    111
+};
+
+f_trait()
+$$

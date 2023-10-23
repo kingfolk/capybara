@@ -559,12 +559,12 @@ func (m *DominatorMaker) Lift(declTable map[string]types.ValType) map[string]typ
 
 	m.placePhi(df)
 
-	// if m.debug {
-	// 	fmt.Println("--- after place phi ---")
-	// 	rb := CFGString(m.rootBlock)
-	// 	fmt.Println(rb)
-	// 	fmt.Println("--- after place phi end ---")
-	// }
+	if m.debug {
+		fmt.Println("--- after place phi ---")
+		rb := CFGString(m.rootBlock)
+		fmt.Println(rb)
+		fmt.Println("--- after place phi end ---")
+	}
 
 	newDecls := m.rename(declTable)
 

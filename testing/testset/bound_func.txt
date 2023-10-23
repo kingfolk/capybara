@@ -1,0 +1,74 @@
+/*@bb
+#bb0:$root$
+{
+  $v1 = person$add($v1,$v2)
+  $v2 = f_bound1($v1,$v2)
+  $v3 = 100
+  $v4 = Rec<int>($v3) 
+  $v5 = $v4
+  $v6 = BoxTrait($v5)
+  $v7 = 1
+  $v8 = f_bound1($v6, $v7) 
+  $v9 = Return $v8
+}
+
+person$add($v1,$v2){
+  #bb0:person$add
+  {
+    $v3 = $v1
+    $v4 = $v3.0
+    $v5 = $v2
+    $v6 = $v4+$v5
+    $v7 = 1
+    $v8 = $v6+$v7
+    $v9 = Return $v8
+  }
+}
+f_bound1($v1,$v2){
+  #bb0:f_bound1
+  {
+    $v3 = $v1
+    $v4 = $v1
+    $v5 = $v2
+    $v6 = TraitCall(add, $v4, $v5) 
+    $v7 = Return $v6
+  }
+}
+*/
+//@anon int(102)
+type person = rec{age:int};
+type counter = trait{
+    add(a:int): int
+};
+
+fun (p person) add(a:int): int = {
+    p.age + a + 1
+};
+
+fun f_bound1[T:counter](c:T, a:int): int = {
+    c.add(a)
+};
+
+let b = person{age:100};
+f_bound1[person](b, 1)
+$$
+
+
+//@anon int(100)
+type person = rec{age:int};
+type counter = trait{
+    add(a:int): int
+};
+
+fun (p person) add(a:int): int = {
+    p.age + a + 1
+};
+
+fun f_bound2[T:counter](c:T): T = {
+    c
+};
+
+let b = person{age:100};
+b = f_bound2[person](b);
+b.age
+$$

@@ -340,7 +340,7 @@ func (e *TraitCall) Type() types.ValType {
 }
 
 func (e *TraitCall) String() string {
-	return "TraitCall" + "(" + e.Name + "," + strings.Join(e.Args, ", ") + ") "
+	return "TraitCall" + "(" + e.Name + ", " + strings.Join(e.Args, ", ") + ") "
 }
 
 func (e *ArrLit) Kind() int {
