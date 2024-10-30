@@ -94,7 +94,14 @@ func EmitIR(mod *ast.AST, debugMode bool, globals ...GlobalDef) (root *ir.Module
 	}
 
 	retTp := blk.Ins[len(blk.Ins)-1].Type()
-	e.insertReturn(blk, retTp)
+	if types.IsPrimitive(retTp) {
+		e.insertReturn(blk, retTp)
+	} else {
+		ret := &ir.Ret{
+			Tp: types.Unit,
+		}
+		e.rvalInstr(ret)
+	}
 	maker := ir.NewDominatorMaker(blk, e.debug)
 	declTable := maker.Lift(e.env.Defs)
 	root = e.module
