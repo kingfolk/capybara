@@ -491,6 +491,9 @@ func (e *Ret) Type() types.ValType {
 }
 
 func (e *Ret) String() string {
+	if e.Target == "" {
+		return "Return"
+	}
 	return "Return " + e.Target
 }
 

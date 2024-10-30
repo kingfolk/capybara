@@ -397,7 +397,9 @@ func (m *DominatorMaker) renameBlock(block *Block, renaming *renamingStack) {
 			case *Ref:
 				i.Ident = renaming.stackSymbol(i.Ident)
 			case *Ret:
-				i.Target = renaming.stackSymbol(i.Target)
+				if i.Target != "" {
+					i.Target = renaming.stackSymbol(i.Target)
+				}
 			case *ArrGet:
 				i.Arr = renaming.stackSymbol(i.Arr)
 				i.Index = renaming.stackSymbol(i.Index)

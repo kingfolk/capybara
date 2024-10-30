@@ -62,6 +62,7 @@ var targetData llvm.TargetData
 
 var (
 	boolT    llvm.Type
+	unitT    llvm.Type
 	intT     llvm.Type
 	floatT   llvm.Type
 	voidPtrT llvm.Type
@@ -91,6 +92,7 @@ func GetRootModule() llvm.Module {
 func Reset() {
 	rootModule = llvm.NewModule("root")
 	context = llvm.GlobalContext()
+	unitT = context.VoidType()
 	boolT = context.Int1Type()
 	intT = context.Int32Type()
 	floatT = context.FloatType()
@@ -273,6 +275,9 @@ func (b *blockBuilder) buildFunc(name string, f *ir.Func) llvm.Value {
 }
 
 func (b *blockBuilder) buildRet(ident string, v *ir.Ret) llvm.Value {
+	if v.Target == "" {
+		return b.builder.CreateRetVoid()
+	}
 	ret := b.resolve(v.Target)
 	if ret.IsNil() {
 		panic("retVal.IsNil")
@@ -616,6 +621,8 @@ func (b *blockBuilder) buildTypePtr(tp types.ValType) llvm.Type {
 // 这部分的区分逻辑需要优化的写法
 func (b *blockBuilder) buildType(tp types.ValType) llvm.Type {
 	switch tp.Code() {
+	case types.TpUnit:
+		return unitT
 	case types.TpBool:
 		return boolT
 	case types.TpInt:
